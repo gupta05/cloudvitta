@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────
+# CloudVitta — root .gitignore
+# Keep secrets, local data, and generated artifacts out of git.
+# ─────────────────────────────────────────────────────────────
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.pnp.cjs
+
+# Environment / secrets — NEVER commit real values.
+# .env.example files ARE committed (they document required vars).
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+
+# Databases (SQLite dev DB + Prisma journals/shm/wal)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Prisma generated client (regenerated via `prisma generate`)
+**/generated/prisma
+.prisma/
+
+# Build output / bundler artifacts
+dist/
+dist-ssr/
+build/
+.vite/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local uploads / generated files / temp working data
+uploads/
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+coverage/
+.nyc_output/
+
+# Caches
+.cache/
+.npm/
+.eslintcache
+
+# Editor / IDE — ignore the folder but keep shared workspace settings
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.local
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini

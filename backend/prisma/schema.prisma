@@ -1,0 +1,699 @@
+// CloudVitta Database Schema
+// Modeled after Meteroid's domain — ~20 core tables
+// Using SQLite via Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Multi-Tenancy ───────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenants Tenant[]
+  users   User[]
+}
+
+model Tenant {
+  id             String   @id @default(uuid())
+  name           String
+  slug           String
+  organizationId String
+  currency       String   @default("INR")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  customers       Customer[]
+  users           User[]
+  productFamilies ProductFamily[]
+  products        Product[]
+  billableMetrics BillableMetric[]
+  plans           Plan[]
+  subscriptions   Subscription[]
+  invoices        Invoice[]
+  creditNotes     CreditNote[]
+  coupons         Coupon[]
+  addons          Addon[]
+  usageEvents     UsageEvent[]
+  apiTokens       ApiToken[]
+  webhookEndpoints WebhookEndpoint[]
+  invoicingEntity InvoicingEntity?
+  storageBuckets  StorageBucket[]
+  payments        Payment[]
+  transactions    Transaction[]
+
+  @@unique([slug, organizationId])
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String
+  displayName    String
+  role           String   @default("user") // admin, member, user
+  organizationId String
+  tenantId       String?  // which tenant this user belongs to
+  customerId     String?  // null = admin/member, non-null = end-user scoped to this customer
+  isVerified     Boolean  @default(false)
+  phone          String   @default("")
+  avatarUrl      String   @default("")
+  lastLoginAt    DateTime?
+  deactivatedAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization            Organization            @relation(fields: [organizationId], references: [id])
+  tenant                  Tenant?                 @relation(fields: [tenantId], references: [id])
+  customer                Customer?               @relation(fields: [customerId], references: [id])
+  sessions                UserSession[]
+  notificationPreference  NotificationPreference?
+  notifications           Notification[]
+  preference              UserPreference?
+}
+
+// ─── Product Catalog ─────────────────────────────────────
+
+model ProductFamily {
+  id       String @id @default(uuid())
+  tenantId String
+  name     String
+  createdAt DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  products Product[]
+  plans    Plan[]
+
+  @@unique([tenantId, name])
+}
+
+model Product {
+  id              String @id @default(uuid())
+  tenantId        String
+  productFamilyId String
+  name            String
+  description     String @default("")
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  productFamily ProductFamily @relation(fields: [productFamilyId], references: [id])
+}
+
+model BillableMetric {
+  id              String @id @default(uuid())
+  tenantId        String
+  name            String
+  code            String  // unique event code, e.g. "api_calls"
+  aggregationType String  // COUNT, SUM, MAX, UNIQUE_COUNT, AVERAGE
+  aggregationKey  String  @default("") // event property to aggregate on (for SUM, MAX, etc.)
+  description     String  @default("")
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  priceComponents PriceComponent[]
+
+  @@unique([tenantId, code])
+}
+
+// ─── Plans & Pricing ─────────────────────────────────────
+
+model Plan {
+  id              String @id @default(uuid())
+  tenantId        String
+  productFamilyId String
+  name            String
+  description     String  @default("")
+  status          String  @default("DRAFT") // DRAFT, ACTIVE, INACTIVE, ARCHIVED
+  planType        String  @default("STANDARD") // STANDARD, FREE, CUSTOM
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  productFamily ProductFamily @relation(fields: [productFamilyId], references: [id])
+  versions      PlanVersion[]
+}
+
+model PlanVersion {
+  id             String  @id @default(uuid())
+  planId         String
+  version        Int     @default(1)
+  billingPeriod  String  @default("MONTHLY") // MONTHLY, QUARTERLY, ANNUAL
+  trialDays      Int     @default(0)
+  isActive       Boolean @default(false)
+  currency       String  @default("INR")
+  createdAt      DateTime @default(now())
+
+  plan            Plan             @relation(fields: [planId], references: [id], onDelete: Cascade)
+  priceComponents PriceComponent[]
+  subscriptions   Subscription[]
+
+  @@unique([planId, version])
+}
+
+model PriceComponent {
+  id               String @id @default(uuid())
+  planVersionId    String
+  name             String
+  feeType          String // RATE, SLOT, CAPACITY, USAGE, ONETIME, RECURRING
+  // JSON-encoded pricing model. For SQLite (no JSONB), we store as text.
+  // Supports: flat, per_unit, tiered, package, usage_based
+  // Example: {"model":"tiered","tiers":[{"upTo":100,"unitPrice":0.10},{"upTo":null,"unitPrice":0.05}]}
+  pricingModel     String @default("{}")
+  billableMetricId String?
+  createdAt        DateTime @default(now())
+
+  planVersion    PlanVersion     @relation(fields: [planVersionId], references: [id], onDelete: Cascade)
+  billableMetric BillableMetric? @relation(fields: [billableMetricId], references: [id])
+  subscriptionComponents SubscriptionComponent[]
+}
+
+// ─── Customers ───────────────────────────────────────────
+
+model Customer {
+  id           String  @id @default(uuid())
+  tenantId     String
+  name         String
+  alias        String? // short internal name
+  email        String?
+  phone        String?
+  billingAddress String @default("") // JSON string
+  shippingAddress String @default("") // JSON string
+  currency     String  @default("INR")
+  balanceCents Int     @default(0) // smallest currency unit (paise for INR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  subscriptions  Subscription[]
+  invoices       Invoice[]
+  usageEvents    UsageEvent[]
+  users          User[]
+  storageBuckets StorageBucket[]
+  paymentMethods PaymentMethod[]
+  payments       Payment[]
+  transactions   Transaction[]
+
+  @@unique([tenantId, alias])
+}
+
+// ─── Subscriptions ───────────────────────────────────────
+
+model Subscription {
+  id              String   @id @default(uuid())
+  tenantId        String
+  customerId      String
+  planVersionId   String
+  status          String   @default("PENDING") // PENDING, TRIAL, ACTIVE, PAUSED, CANCELLED, ENDED
+  billingStartDate DateTime
+  billingEndDate  DateTime?
+  billingDay      Int      @default(1) // day of month for billing
+  trialStartDate  DateTime?
+  trialEndDate    DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  netTermsDays    Int      @default(30)
+  currentPeriodStart DateTime? // set when a paid period is purchased/renewed
+  currentPeriodEnd   DateTime? // paid-through date; null = free/legacy (never expires)
+  autoRenew          Boolean   @default(false) // prep for future recurring billing
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Coupon applied to this subscription
+  couponId        String?
+  coupon          Coupon?  @relation(fields: [couponId], references: [id])
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id])
+
+  components   SubscriptionComponent[]
+  addons       SubscriptionAddon[]
+  invoices     Invoice[]
+  payments     Payment[]
+  transactions Transaction[]
+}
+
+model SubscriptionComponent {
+  id               String @id @default(uuid())
+  subscriptionId   String
+  priceComponentId String
+  // Override pricing for this specific subscription (JSON string, null = use default)
+  pricingOverride  String?
+  createdAt        DateTime @default(now())
+
+  subscription   Subscription   @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  priceComponent PriceComponent @relation(fields: [priceComponentId], references: [id])
+}
+
+model SubscriptionAddon {
+  id             String @id @default(uuid())
+  subscriptionId String
+  addonId        String
+  quantity       Int    @default(1)
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  addon        Addon        @relation(fields: [addonId], references: [id])
+}
+
+// ─── Invoices ────────────────────────────────────────────
+
+model Invoice {
+  id              String   @id @default(uuid())
+  tenantId        String
+  customerId      String
+  subscriptionId  String?
+  invoiceNumber   String
+  status          String   @default("DRAFT") // DRAFT, FINALIZED, PAID, VOID, OVERDUE
+  currency        String   @default("INR")
+  subtotalCents   Int      @default(0)
+  taxCents        Int      @default(0)
+  totalCents      Int      @default(0)
+  amountDueCents  Int      @default(0)
+  periodStart     DateTime
+  periodEnd       DateTime
+  issueDate       DateTime @default(now())
+  dueDate         DateTime
+  paidAt          DateTime?
+  voidedAt        DateTime?
+  notes           String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  lines        InvoiceLine[]
+  creditNotes  CreditNote[]
+  payments     Payment[]
+  transactions Transaction[]
+}
+
+model InvoiceLine {
+  id          String @id @default(uuid())
+  invoiceId   String
+  name        String
+  description String @default("")
+  quantity    Float  @default(1)
+  unitPriceCents Int
+  totalCents  Int
+  // JSON metadata: { priceComponentId, metricCode, tier, ... }
+  metadata    String @default("{}")
+  createdAt   DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+// ─── Credit Notes ────────────────────────────────────────
+
+model CreditNote {
+  id           String   @id @default(uuid())
+  tenantId     String
+  invoiceId    String
+  creditNumber String
+  reason       String   @default("")
+  status       String   @default("DRAFT") // DRAFT, FINALIZED, VOIDED
+  totalCents   Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+}
+
+// ─── Coupons ─────────────────────────────────────────────
+
+model Coupon {
+  id            String   @id @default(uuid())
+  tenantId      String
+  code          String
+  description   String   @default("")
+  discountType  String   // PERCENTAGE, FIXED_AMOUNT
+  discountValue Float    // percentage (0-100) or cents for fixed
+  currency      String?  // required for FIXED_AMOUNT
+  maxRedemptions Int?
+  timesRedeemed Int      @default(0)
+  expiresAt     DateTime?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id])
+  subscriptions Subscription[]
+
+  @@unique([tenantId, code])
+}
+
+// ─── Add-ons ─────────────────────────────────────────────
+
+model Addon {
+  id          String @id @default(uuid())
+  tenantId    String
+  name        String
+  description String @default("")
+  feeType     String @default("ONETIME") // ONETIME, RECURRING
+  priceCents  Int    @default(0)
+  currency    String @default("INR")
+  createdAt   DateTime @default(now())
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id])
+  subscriptionAddons  SubscriptionAddon[]
+}
+
+// ─── Usage Metering ──────────────────────────────────────
+
+model UsageEvent {
+  id         String   @id @default(uuid())
+  tenantId   String
+  customerId String
+  eventCode  String   // maps to BillableMetric.code
+  timestamp  DateTime @default(now())
+  // JSON properties: { "tokens": 150, "region": "us-east" }
+  properties String   @default("{}")
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([tenantId, customerId, eventCode, timestamp])
+}
+
+// ─── API Tokens ──────────────────────────────────────────
+
+model ApiToken {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  tokenHash String   @unique
+  prefix    String   // first 8 chars of token, for identification
+  isActive  Boolean  @default(true)
+  expiresAt DateTime?
+  lastUsedAt DateTime?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+}
+
+// ─── Webhooks ────────────────────────────────────────────
+
+model WebhookEndpoint {
+  id        String  @id @default(uuid())
+  tenantId  String
+  url       String
+  secret    String  // signing secret
+  // JSON array of event types: ["invoice.created","subscription.activated"]
+  events    String  @default("[]")
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+}
+
+// ─── Settings ────────────────────────────────────────────
+
+model InvoicingEntity {
+  id            String @id @default(uuid())
+  tenantId      String @unique
+  legalName     String @default("")
+  taxId         String @default("")
+  addressLine1  String @default("")
+  addressLine2  String @default("")
+  city          String @default("")
+  state         String @default("")
+  zipCode       String @default("")
+  country       String @default("")
+  logoUrl       String @default("")
+  footerNote    String @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+}
+
+// ─── Object Storage ──────────────────────────────────────
+
+model StorageBucket {
+  id          String   @id @default(uuid())
+  tenantId    String
+  customerId  String
+  name        String
+  region      String   @default("us-east-1")
+  isPublic    Boolean  @default(false)
+  quotaBytes  BigInt?
+  usedBytes   BigInt   @default(0)
+  objectCount Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+  objects  StorageObject[]
+
+  @@unique([tenantId, customerId, name])
+}
+
+model StorageObject {
+  id          String   @id @default(uuid())
+  bucketId    String
+  key         String
+  sizeBytes   BigInt
+  contentType String   @default("application/octet-stream")
+  checksum    String   @default("")
+  storagePath String   @default("")  // Full OCI object key, e.g. "tenant-x/customer-y/bucket-z/file.txt"
+  metadata    String   @default("{}")
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bucket StorageBucket @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+
+  @@unique([bucketId, key])
+  @@index([bucketId, isDeleted])
+}
+
+model StorageSnapshot {
+  id            String   @id @default(uuid())
+  tenantId      String
+  customerId    String
+  bucketId      String?
+  usedBytes     BigInt
+  objectCount   Int
+  snapshotTime  DateTime @default(now())
+
+  @@index([tenantId, customerId, snapshotTime])
+}
+
+// ─── Pending Registrations (OTP Verification) ────────────
+
+model PendingRegistration {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  otpHash      String   // bcrypt-hashed 6-digit OTP
+  expiresAt    DateTime // OTP expiry (10 minutes from creation)
+  attempts     Int      @default(0) // brute-force tracking (max 5)
+  lastSentAt   DateTime @default(now()) // rate-limit resends (60s cooldown)
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// ─── Password Reset Requests (Forgot Password OTP) ───────
+
+model PasswordResetRequest {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  otpHash    String   // bcrypt-hashed 6-digit OTP
+  expiresAt  DateTime // OTP expiry (10 minutes from creation)
+  attempts   Int      @default(0) // brute-force tracking (max 5)
+  lastSentAt DateTime @default(now()) // rate-limit resends (60s cooldown)
+  createdAt  DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// ─── User Sessions (Login History & Active Sessions) ─────
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  ipAddress    String   @default("")
+  userAgent    String   @default("")
+  isActive     Boolean  @default(true)
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+}
+
+// ─── Notification Preferences ────────────────────────────
+
+model NotificationPreference {
+  id                 String  @id @default(uuid())
+  userId             String  @unique
+  // Billing
+  invoiceCreated     Boolean @default(true)
+  paymentReceived    Boolean @default(true)
+  paymentFailed      Boolean @default(true)
+  subscriptionChange Boolean @default(true)
+  // Storage
+  storageWarning75   Boolean @default(true)
+  storageWarning90   Boolean @default(true)
+  storageQuotaFull   Boolean @default(true)
+  uploadComplete     Boolean @default(false)
+  // Security
+  newLogin           Boolean @default(true)
+  passwordChanged    Boolean @default(true)
+  apiKeyCreated      Boolean @default(true)
+  // Account
+  accountUpdates     Boolean @default(true)
+  productNews        Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── In-App Notifications ────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   // billing, storage, security, account, system
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  metadata  String   @default("{}")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+}
+
+// ─── Payment Methods (Simulated) ─────────────────────────
+
+model PaymentMethod {
+  id         String   @id @default(uuid())
+  customerId String
+  tenantId   String
+  type       String   @default("card") // card, bank_transfer
+  brand      String   @default("")     // visa, mastercard, amex, discover
+  last4      String   @default("")
+  expMonth   Int?
+  expYear    Int?
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+}
+
+// ─── User Preferences ────────────────────────────────────
+
+model UserPreference {
+  id                      String @id @default(uuid())
+  userId                  String @unique
+  timezone                String @default("UTC")
+  dateFormat              String @default("MM/DD/YYYY")
+  storageRegion           String @default("us-east-1")
+  defaultBucketVisibility String @default("private")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Payments (Razorpay gateway) ─────────────────────────
+
+model Payment {
+  id                String   @id @default(uuid())
+  tenantId          String
+  customerId        String
+  subscriptionId    String?
+  invoiceId         String?
+  planVersionId     String?
+  purpose           String   @default("subscription_purchase") // subscription_purchase, renewal
+  razorpayOrderId   String   @unique
+  razorpayPaymentId String?  @unique
+  razorpaySignature String?
+  amountCents       Int      // integer paise
+  currency          String   @default("INR")
+  status            String   @default("CREATED") // CREATED, CAPTURED, FAILED, CANCELLED, REFUNDED
+  method            String?  // card, upi, netbanking, wallet
+  errorCode         String?
+  errorDescription  String?
+  refundedCents     Int      @default(0)
+  razorpayRefundId  String?
+  gatewayResponse   String   @default("{}")
+  capturedAt        DateTime?
+  failedAt          DateTime?
+  refundedAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id])
+  transactions Transaction[]
+
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, status])
+}
+
+// ─── Financial Transaction Ledger (immutable, append-only) ──
+
+model Transaction {
+  id             String   @id @default(uuid())
+  tenantId       String
+  customerId     String
+  type           String   // PAYMENT_CAPTURED, PAYMENT_FAILED, PAYMENT_REFUNDED,
+                          // SUBSCRIPTION_ACTIVATED, SUBSCRIPTION_RENEWED, SUBSCRIPTION_CANCELLED,
+                          // SUBSCRIPTION_EXPIRED, INVOICE_GENERATED, INVOICE_PAID,
+                          // CREDIT_ADJUSTMENT, DEBIT_ADJUSTMENT
+  direction      String   @default("NEUTRAL") // CREDIT (money in), DEBIT (money out), NEUTRAL
+  amountCents    Int      @default(0)
+  currency       String   @default("INR")
+  description    String
+  paymentId      String?
+  invoiceId      String?
+  subscriptionId String?
+  metadata       String   @default("{}")
+  idempotencyKey String?  @unique // e.g. "<paymentId>:PAYMENT_CAPTURED"
+  createdAt      DateTime @default(now())
+  // Immutable: no updatedAt — rows are never updated or deleted by application code.
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  payment      Payment?      @relation(fields: [paymentId], references: [id])
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, type, createdAt])
+}
+
+// ─── Payment Webhook Events (dedup + audit) ──────────────
+
+model PaymentWebhookEvent {
+  id              String   @id @default(uuid())
+  razorpayEventId String   @unique // x-razorpay-event-id header
+  eventType       String   // payment.captured, payment.failed, refund.processed, ...
+  payload         String   @default("{}")
+  status          String   @default("PROCESSING") // PROCESSING, PROCESSED, ERROR
+  error           String?
+  receivedAt      DateTime @default(now())
+
+  @@index([eventType, receivedAt])
+}

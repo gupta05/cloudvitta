@@ -1,0 +1,339 @@
+@import "tailwindcss";
+
+/* ─── CloudVitta Design System — Enterprise Dark ────────── */
+
+@theme {
+  --color-cv-bg: #09090b;
+  --color-cv-surface: #18181b;
+  --color-cv-surface-2: #1c1c1e;
+  --color-cv-surface-3: #27272a;
+  --color-cv-border: #27272a;
+  --color-cv-border-light: #3f3f46;
+  --color-cv-text: #fafafa;
+  --color-cv-text-secondary: #a1a1aa;
+  --color-cv-text-muted: #71717a;
+  --color-cv-primary: #3b82f6;
+  --color-cv-primary-hover: #60a5fa;
+  --color-cv-primary-muted: #2563eb;
+  --color-cv-accent: #3b82f6;
+  --color-cv-accent-muted: #2563eb;
+  --color-cv-success: #22c55e;
+  --color-cv-warning: #f59e0b;
+  --color-cv-danger: #ef4444;
+  --color-cv-info: #3b82f6;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ─── Base Styles ───────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-cv-bg);
+  color: var(--color-cv-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Cards ─────────────────────────────────────────────── */
+.glass-card {
+  background: var(--color-cv-surface);
+  border: 1px solid var(--color-cv-border);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* ─── Removed: glow & gradient cosmetics ────────────────── */
+.gradient-text {
+  color: var(--color-cv-text);
+}
+
+.glow-primary {
+  /* No-op: glow removed in enterprise theme */
+}
+
+.glow-accent {
+  /* No-op */
+}
+
+/* ─── Sidebar Styling ───────────────────────────────────── */
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-cv-text-muted);
+  transition: all 0.15s ease;
+  border-left: 2px solid transparent;
+}
+
+.sidebar-link:hover {
+  background: var(--color-cv-surface-3);
+  color: var(--color-cv-text-secondary);
+}
+
+.sidebar-link.active {
+  background: var(--color-cv-surface-3);
+  color: var(--color-cv-text);
+  border-left-color: var(--color-cv-primary);
+}
+
+/* ─── Table Styles ──────────────────────────────────────── */
+.data-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.data-table th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-cv-text-muted);
+  border-bottom: 1px solid var(--color-cv-border);
+}
+
+.data-table td {
+  padding: 0.85rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-cv-text);
+  border-bottom: 1px solid var(--color-cv-border);
+}
+
+.data-table tbody tr {
+  transition: background 0.12s ease;
+}
+
+.data-table tbody tr:hover {
+  background: var(--color-cv-surface-2);
+}
+
+/* ─── Animations ────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.25s ease-out;
+}
+
+/* ─── Status Badges ─────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.badge-active { background: rgba(34, 197, 94, 0.12); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+.badge-trial { background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
+.badge-pending { background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+.badge-cancelled { background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+.badge-draft { background: rgba(113, 113, 122, 0.12); color: #a1a1aa; border: 1px solid rgba(113, 113, 122, 0.2); }
+.badge-paid { background: rgba(34, 197, 94, 0.12); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+.badge-finalized { background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
+.badge-overdue { background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+.badge-void { background: rgba(113, 113, 122, 0.12); color: #71717a; border: 1px solid rgba(113, 113, 122, 0.2); }
+.badge-captured { background: rgba(34, 197, 94, 0.12); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+.badge-failed { background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+.badge-refunded { background: rgba(168, 85, 247, 0.12); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.2); }
+
+/* ─── Form Styles ───────────────────────────────────────── */
+.form-input {
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  background: var(--color-cv-bg);
+  border: 1px solid var(--color-cv-border-light);
+  border-radius: 6px;
+  color: var(--color-cv-text);
+  font-size: 0.875rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--color-cv-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.form-input::placeholder {
+  color: var(--color-cv-text-muted);
+}
+
+.form-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-cv-text-secondary);
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ─── Buttons ───────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.btn-primary {
+  background: var(--color-cv-primary);
+  color: white;
+}
+.btn-primary:hover {
+  background: var(--color-cv-primary-hover);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+}
+
+.btn-secondary {
+  background: var(--color-cv-surface-3);
+  color: var(--color-cv-text);
+  border: 1px solid var(--color-cv-border-light);
+}
+.btn-secondary:hover {
+  background: #3f3f46;
+  border-color: #52525b;
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-cv-text-muted);
+}
+.btn-ghost:hover {
+  background: var(--color-cv-surface-3);
+  color: var(--color-cv-text);
+}
+
+.btn-sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* ─── Progress Bar ──────────────────────────────────────── */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--color-cv-surface-3);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--color-cv-primary);
+  border-radius: 9999px;
+  transition: width 0.5s ease;
+}
+
+/* ─── Storage Meter ─────────────────────────────────────── */
+.storage-meter {
+  width: 100%;
+  height: 6px;
+  background: var(--color-cv-surface-3);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.storage-meter-fill {
+  height: 100%;
+  background: var(--color-cv-primary);
+  border-radius: 9999px;
+  transition: width 0.5s ease;
+}
+
+/* ─── Progress Bar (Billing Usage) ─────────────────────── */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--color-cv-surface-3);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-cv-primary), var(--color-cv-accent));
+  border-radius: 9999px;
+  transition: width 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* ─── Dropzone ──────────────────────────────────────────── */
+.dropzone {
+  border: 2px dashed var(--color-cv-border-light);
+  border-radius: 10px;
+  padding: 2rem;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.dropzone:hover, .dropzone.active {
+  border-color: var(--color-cv-primary);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+/* ─── Spin Animation ────────────────────────────────────── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ─── Toast / Notification Viewport Safety ──────────────────
+   Sonner already collapses to full-width below 600px via its own stylesheet.
+   These rules add a hard ceiling so a toast can NEVER exceed the viewport or
+   clip off-screen — regardless of message length (long emails, URLs, errors)
+   or extreme/unusual viewport widths. Targets sonner's documented data hooks. */
+[data-sonner-toaster] {
+  max-width: calc(100vw - 2rem) !important;
+}
+
+[data-sonner-toast] {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  box-sizing: border-box;
+}

@@ -1,0 +1,132 @@
+import { Router } from 'express';
+import { authenticate, requireAdminOrMember } from '../middleware/auth.js';
+import { tenantContext, validateTenantAccess } from '../middleware/tenantContext.js';
+
+const router = Router();
+router.use(authenticate, tenantContext, validateTenantAccess, requireAdminOrMember);
+
+// GET /api/stats — dashboard statistics
+router.get('/', async (req, res, next) => {
+  try {
+    const prisma = req.app.locals.prisma;
+    const tenantId = req.tenantId;
+
+    // Parallel queries for dashboard KPIs
+    const [
+      totalCustomers,
+      activeSubscriptions,
+      trialSubscriptions,
+      totalInvoices,
+      paidInvoices,
+      overdueInvoices,
+      recentInvoices,
+      subscriptionsByStatus,
+    ] = await Promise.all([
+      prisma.customer.count({ where: { tenantId } }),
+      prisma.subscription.count({ where: { tenantId, status: 'ACTIVE' } }),
+      prisma.subscription.count({ where: { tenantId, status: 'TRIAL' } }),
+      prisma.invoice.count({ where: { tenantId } }),
+      prisma.invoice.count({ where: { tenantId, status: 'PAID' } }),
+      prisma.invoice.count({ where: { tenantId, status: 'OVERDUE' } }),
+      prisma.invoice.findMany({
+        where: { tenantId, status: 'PAID' },
+        select: { totalCents: true, issueDate: true },
+        orderBy: { issueDate: 'desc' },
+        take: 365,
+      }),
+      prisma.subscription.groupBy({
+        by: ['status'],
+        where: { tenantId },
+        _count: true,
+      }),
+    ]);
+
+    // Calculate MRR from active subscriptions' plan version prices
+    const activeSubs = await prisma.subscription.findMany({
+      where: { tenantId, status: 'ACTIVE' },
+      include: {
+        planVersion: { include: { priceComponents: true } },
+        components: true,
+        coupon: true,
+      },
+    });
+
+    let mrrCents = 0;
+    for (const sub of activeSubs) {
+      for (const comp of sub.planVersion.priceComponents) {
+        const pricing = JSON.parse(comp.pricingModel || '{}');
+        // Only flat (fixed recurring) components contribute to base MRR.
+        // Usage-based rates (per_unit, per_thousand, tiered) are not fixed revenue.
+        if (pricing.model === 'flat') {
+          const amount = pricing.price || 0;
+          const cents = Math.round(amount * 100);
+          // Normalize to monthly
+          const period = sub.planVersion.billingPeriod;
+          if (period === 'MONTHLY') mrrCents += cents;
+          else if (period === 'QUARTERLY') mrrCents += Math.round(cents / 3);
+          else if (period === 'ANNUAL') mrrCents += Math.round(cents / 12);
+        }
+      }
+    }
+
+    // Build monthly revenue chart (last 12 months)
+    const monthlyRevenue = [];
+    const now = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
+      const monthInvoices = recentInvoices.filter((inv) => {
+        const d = new Date(inv.issueDate);
+        return d >= monthStart && d <= monthEnd;
+      });
+      const revenue = monthInvoices.reduce((sum, inv) => sum + inv.totalCents, 0);
+      monthlyRevenue.push({
+        month: monthStart.toISOString().slice(0, 7), // YYYY-MM
+        revenueCents: revenue,
+      });
+    }
+
+    // ─── Storage Stats ──────────────────────────────────────
+    const [totalBuckets, totalObjects, storageAgg, storageBuckets] = await Promise.all([
+      prisma.storageBucket.count({ where: { tenantId } }),
+      prisma.storageObject.count({ where: { bucket: { tenantId }, isDeleted: false } }),
+      // True total across ALL buckets (the top-5 list below must not define the total).
+      prisma.storageBucket.aggregate({ where: { tenantId }, _sum: { usedBytes: true } }),
+      prisma.storageBucket.findMany({
+        where: { tenantId },
+        select: { usedBytes: true, name: true, customerId: true, customer: { select: { name: true } } },
+        orderBy: { usedBytes: 'desc' },
+        take: 5,
+      }),
+    ]);
+
+    const totalStorageBytes = Number(storageAgg._sum.usedBytes || 0);
+
+    res.json({
+      totalCustomers,
+      activeSubscriptions,
+      trialSubscriptions,
+      totalInvoices,
+      paidInvoices,
+      overdueInvoices,
+      mrrCents,
+      monthlyRevenue,
+      subscriptionsByStatus: subscriptionsByStatus.map((s) => ({ status: s.status, count: s._count })),
+      // Storage stats
+      storage: {
+        totalBuckets,
+        totalObjects,
+        totalBytes: totalStorageBytes,
+        totalGB: Math.round(totalStorageBytes / (1024 * 1024 * 1024) * 1000) / 1000,
+        topBuckets: storageBuckets.map(b => ({
+          name: b.name,
+          customerName: b.customer.name,
+          usedBytes: Number(b.usedBytes),
+          usedGB: Math.round(Number(b.usedBytes) / (1024 * 1024 * 1024) * 1000) / 1000,
+        })),
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+export default router;
