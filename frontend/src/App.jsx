@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import api from './api/client';
 import AppLayout from './components/layout/AppLayout';
 import CustomerLayout from './components/layout/CustomerLayout';
+import LandingPage from './pages/landing/LandingPage';
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
 import OtpVerification from './pages/auth/OtpVerification';
@@ -60,7 +61,7 @@ function AdminRoute({ children }) {
 
 function UserRoute({ children }) {
   const role = localStorage.getItem('cv_role');
-  if (role !== 'user') return <Navigate to="/" replace />;
+  if (role !== 'user') return <Navigate to="/dashboard" replace />;
   return children;
 }
 
@@ -83,6 +84,8 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Public landing page — the application's entry point */}
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/verify-otp" element={<OtpVerification />} />
@@ -121,7 +124,7 @@ export default function App() {
             <AdminRoute>
               <AppLayout>
                 <Routes>
-                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/customers" element={<CustomerList />} />
                   <Route path="/customers/new" element={<CustomerCreate />} />
                   <Route path="/customers/:id" element={<CustomerDetail />} />

@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for understanding this project across development sessions. Whenever a significant change lands — new feature, architectural change, integration, refactor, schema modification, infra/deployment change, security improvement, pricing update, auth change — **update the relevant sections of this file in the same piece of work**. It must always describe the *current* implementation, never an aspirational or outdated one.
 >
-> Last synchronized: 2026-07-16 (git-readiness review — comprehensive root .gitignore; per-service .env.example templates for backend + frontend; README env-setup step and accurate demo creds. No application behavior changed.).
+> Last synchronized: 2026-07-16 (public marketing landing page at `/` — admin dashboard moved to `/dashboard`, role redirects updated; new `DESIGN.md` documents the design system; frontend-only change, no API/schema/auth changes).
 
 ---
 
@@ -10,8 +10,8 @@
 
 **CloudVitta** is a multi-tenant **cloud object storage service with built-in usage-based billing and subscription management**. It is a deliberate, self-hosted clone of [Meteroid](https://meteroid.com)-style billing (several backend service headers say "Equivalent to Meteroid's ...") fronting **Oracle Cloud Infrastructure (OCI) Object Storage** as the actual storage backend.
 
-Two user-facing surfaces exist in one React app:
-- **Admin app** (`/`) — for platform operators: customers, plans, subscriptions, invoices, coupons, addons, usage events, storage overview, user management.
+Two user-facing surfaces exist in one React app, behind a public **marketing landing page** (`/` — hero, features, how-it-works, security, pricing, FAQ, CTA; links to Log In / Create Account):
+- **Admin app** (`/dashboard` + other admin routes) — for platform operators: customers, plans, subscriptions, invoices, coupons, addons, usage events, storage overview, user management.
 - **Customer portal** (`/portal`) — for end users: file storage (upload/download/browse), billing self-service (plan upgrade/downgrade, invoices, simulated payment methods), API keys, account/security settings.
 
 **What it is:** a demo/dev-grade S3-like storage product with metered billing, plan catalog, invoice generation, OTP-verified auth, **Razorpay payments (Test Mode)** with an immutable transaction ledger, and an admin back office.
@@ -28,6 +28,7 @@ zoho project/
 ├── .env.example            # aggregate env reference (points to per-service templates)
 ├── README.md               # feature matrix, setup (env step + npm run setup), demo creds
 ├── implementation_plan.md  # historical work plan (forgot-password, pricing consistency, toast fixes — all implemented)
+├── DESIGN.md               # design-system reference (living document — keep in sync with UI changes)
 ├── CONTEXT.md              # ← this file
 ├── backend/
 │   ├── .env.example        # canonical backend env template (all vars, no values)
@@ -46,7 +47,7 @@ zoho project/
     ├── .env.example       # frontend env template (VITE_API_URL — optional/unused)
     ├── vite.config.js      # port 5173, /api proxy → localhost:3000
     ├── index.html          # Inter font, dark theme
-    ├── dist/               # stale build artifact (predates INR conversion — rebuild before serving)
+    ├── dist/               # build artifact (gitignored; regenerate with `npm run build`)
     └── src/
         ├── main.jsx        # Router + QueryClientProvider + sonner Toaster
         ├── App.jsx         # ALL routes + route guards (no lazy loading)
@@ -54,9 +55,9 @@ zoho project/
         ├── api/client.js   # singleton fetch-based API client (~100 methods)
         ├── lib/currency.js # shared INR formatter (only lib file)
         ├── components/     # layout/ (AppLayout, CustomerLayout), ui/ (ErrorBanner, LoadingSpinner)
-        └── pages/          # auth/, dashboard/, customers/, catalog/, plans/, subscriptions/,
-                            # invoices/, creditNotes/, coupons/, addons/, events/, settings/,
-                            # users/, storage/, portal/
+        └── pages/          # landing/ (public marketing page), auth/, dashboard/, customers/, catalog/,
+                            # plans/, subscriptions/, invoices/, creditNotes/, coupons/, addons/, events/,
+                            # settings/, users/, storage/, portal/
 ```
 
 ## 3. Tech Stack
@@ -114,7 +115,7 @@ Single shared `PrismaClient` on `app.locals.prisma`; routes access it via `req.a
 | `member` | Admin app (adminUsers routes via `requireAdminOrMember`; hard delete is admin-only) |
 | `user` | Customer portal only (`requireUser` on all `/api/portal/*`); scoped to their own `customerId` |
 
-Frontend guards (in `App.jsx`, reading localStorage): `ProtectedRoute` (token exists), `AdminRoute` (role ≠ user), `UserRoute` (role = user). Login redirects by role: `user` → `/portal`, else `/`.
+Frontend guards (in `App.jsx`, reading localStorage): `ProtectedRoute` (token exists), `AdminRoute` (role ≠ user), `UserRoute` (role = user). Login redirects by role: `user` → `/portal`, else `/dashboard`.
 
 **RBAC enforcement:** All 15 admin CRUD route files (customers, plans, subscriptions, invoices, coupons, addons, events, stats, products, productFamilies, billableMetrics, apiTokens, webhooks, settings, creditNotes) enforce `requireAdminOrMember` middleware. Portal users (role `user`) receive 403 on all admin endpoints.
 
@@ -219,10 +220,10 @@ Frontend client: `frontend/src/api/client.js` — singleton fetch wrapper, ~100 
 
 ## 14. Frontend Architecture
 
-- **Routing:** all in `App.jsx`, statically imported (no code-splitting). Public auth pages; `/portal/*` inside `CustomerLayout`; everything else inside `AppLayout`.
+- **Routing:** all in `App.jsx`, statically imported (no code-splitting). Public `/` = marketing landing page (`pages/landing/LandingPage.jsx` — no layout shell, sticky header, IntersectionObserver scroll-reveal, anchors to #features/#pricing/#faq; shows Log In / Create Account, or an "Open portal/dashboard" shortcut when a token exists). Public auth pages; `/portal/*` inside `CustomerLayout`; admin app inside `AppLayout` with Dashboard at **`/dashboard`** (moved off `/`). Role redirects (Login, OtpVerification, `UserRoute`) send admins/members to `/dashboard`.
 - **State:** local `useState`/`useEffect` + direct `api.*` calls per page. **React Query is installed and its provider mounted, but has zero consumers** (dead infra). No context providers — auth state = localStorage (`cv_token`, `cv_tenant_id`, `cv_role`, `cv_customer_id`, `cv_user`) + the ApiClient singleton.
 - **Layouts:** `AppLayout` (admin sidebar, sectioned nav, **tenant switcher** → `setTenantId` + full reload, `/auth/me` re-sync on mount) vs `CustomerLayout` (portal sidebar, **notification bell** with unread badge polled every 30s, server-side logout).
-- **Design system:** entirely in `src/index.css` — Tailwind v4 `@theme` with `cv-*` tokens (`bg #09090b`, primary `#3b82f6`), component classes (`.glass-card`, `.data-table`, `.badge badge-{status}`, `.btn`, `.form-input`, `.dropzone`, `.progress-bar`). **Dark-only** — no light mode.
+- **Design system:** entirely in `src/index.css` — Tailwind v4 `@theme` with `cv-*` tokens (`bg #09090b`, primary `#3b82f6`), component classes (`.glass-card`, `.data-table`, `.badge badge-{status}`, `.btn`, `.form-input`, `.dropzone`, `.progress-bar`, landing `.landing-grid-bg`/`.reveal` with `prefers-reduced-motion` support). **Dark-only** — no light mode. Documented in root **`DESIGN.md`** (living document, keep in sync).
 - **Charts:** Recharts directly in 4 pages (Dashboard revenue line ₹, subs bar; storage area charts).
 - **Uploads:** native HTML5 drag-drop (admin `BucketDetail` whole-page drop; portal `CustomerBucketDetail` dropzone card) → multipart FormData. Downloads via blob + Content-Disposition parsing.
 - **Toasts:** sonner, top-right, with viewport-overflow hardening (maxWidth calc, word-break) in main.jsx + index.css.
@@ -320,7 +321,6 @@ npm run db:studio      # Prisma Studio
 - JWT in localStorage (XSS-exfiltratable); portal invoice "download" is a `document.write` print window with unescaped interpolation.
 - `zod` and `uuid` are declared deps but never used (validation is ad-hoc); React Query mounted but unused; `formatRupees`/`CURRENCY_SYMBOL` exported but unused.
 - Dead schema features: `Subscription.PAUSED`, `Customer.balanceCents`, `StorageBucket.isPublic`, `SubscriptionComponent.pricingOverride` (stored, never read by billing), `Invoice.notes`.
-- Stale `frontend/dist/` build predates the INR conversion (still contains USD) — rebuild before serving.
 - Minor locale drift: a few date formats still use `en-US` (e.g., `CustomerDashboard.jsx`).
 - Portal contact form is fake (setTimeout + toast, sends nothing).
 - Razorpay webhooks require a public tunnel (e.g. ngrok) in local dev — the verify endpoint carries the happy path, but refunds only arrive via webhook.

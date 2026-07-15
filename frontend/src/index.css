@@ -322,6 +322,51 @@ body {
   animation: spin 1s linear infinite;
 }
 
+/* ─── Landing Page ──────────────────────────────────────── */
+/* Smooth in-page anchor scrolling, scoped to the landing page wrapper. */
+.landing-smooth {
+  scroll-behavior: smooth;
+}
+
+/* Faded grid backdrop for hero / CTA sections. */
+.landing-grid-bg {
+  background-image:
+    linear-gradient(to right, var(--color-cv-border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-cv-border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, black 35%, transparent 90%);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, black 35%, transparent 90%);
+  pointer-events: none;
+}
+
+/* Scroll-reveal: elements start hidden and rise into place when they
+   enter the viewport (driven by IntersectionObserver in LandingPage). */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-smooth {
+    scroll-behavior: auto;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .animate-fade-in,
+  .animate-slide-in {
+    animation: none;
+  }
+}
+
 /* ─── Toast / Notification Viewport Safety ──────────────────
    Sonner already collapses to full-width below 600px via its own stylesheet.
    These rules add a hard ceiling so a toast can NEVER exceed the viewport or

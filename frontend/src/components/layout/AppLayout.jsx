@@ -9,7 +9,7 @@ import {
 
 // Full admin navigation
 const adminNavItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { type: 'divider', label: 'OBJECT STORAGE' },
   { to: '/storage', icon: HardDrive, label: 'Storage Overview' },
   { to: '/storage/buckets', icon: FolderOpen, label: 'Buckets' },

@@ -27,7 +27,7 @@ export default function Login() {
       }
       toast.success('Welcome back!');
       // Redirect based on role
-      navigate(data.user.role === 'user' ? '/portal' : '/');
+      navigate(data.user.role === 'user' ? '/portal' : '/dashboard');
     } catch (err) {
       toast.error(err.message);
     } finally {

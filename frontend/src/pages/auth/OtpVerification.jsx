@@ -124,7 +124,7 @@ export default function OtpVerification() {
 
       // Brief pause to show success animation, then redirect
       setTimeout(() => {
-        navigate(data.user.role === 'user' ? '/portal' : '/', { replace: true });
+        navigate(data.user.role === 'user' ? '/portal' : '/dashboard', { replace: true });
       }, 1500);
     } catch (err) {
       setError(err.message);
