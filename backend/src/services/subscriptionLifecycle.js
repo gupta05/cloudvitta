@@ -14,6 +14,9 @@
 import { ApiError } from '../utils/errors.js';
 import { recordTransaction, TXN } from './ledger.js';
 import { computePlanChargeCents, notifyCustomerUsers } from './paymentService.js';
+// Circular import (billingCycles → paymentService → this module) is safe:
+// only hoisted function declarations are called, and only at runtime.
+import { finalizeMeteredCycleNow } from './billingCycles.js';
 
 const VALID_TRANSITIONS = {
   PENDING: ['ACTIVE', 'CANCELLED'],
@@ -57,10 +60,19 @@ export async function activateSubscription(prisma, subscriptionId) {
  * Cancel a subscription.
  */
 export async function cancelSubscription(prisma, subscriptionId, reason) {
-  const sub = await prisma.subscription.findUnique({ where: { id: subscriptionId } });
+  const sub = await prisma.subscription.findUnique({
+    where: { id: subscriptionId },
+    include: { planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } } },
+  });
   if (!sub) throw new ApiError(404, 'Subscription not found');
 
   validateTransition(sub.status, 'CANCELLED');
+
+  // A metered subscription is billed for its partial cycle before it leaves
+  // ACTIVE status (the invoice engine rejects non-ACTIVE subs).
+  if (sub.status === 'ACTIVE' && sub.planVersion.plan.planType === 'METERED') {
+    await finalizeMeteredCycleNow(prisma, sub, reason || 'Cancelled by admin');
+  }
 
   return prisma.subscription.update({
     where: { id: subscriptionId },
@@ -82,7 +94,7 @@ export async function cancelSubscription(prisma, subscriptionId, reason) {
 export async function changeSubscriptionPlan(prisma, subscriptionId, newPlanVersionId) {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
-    include: { components: true },
+    include: { components: true, planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } } },
   });
   if (!sub) throw new ApiError(404, 'Subscription not found');
   if (!['ACTIVE', 'TRIAL'].includes(sub.status)) {
@@ -94,6 +106,12 @@ export async function changeSubscriptionPlan(prisma, subscriptionId, newPlanVers
     include: { priceComponents: true },
   });
   if (!newVersion) throw new ApiError(404, 'New plan version not found');
+
+  // A metered subscription leaving its plan is billed for the partial cycle
+  // first, so measured usage is never lost on an in-place plan swap.
+  if (sub.status === 'ACTIVE' && sub.planVersion.plan.planType === 'METERED' && sub.planVersionId !== newPlanVersionId) {
+    await finalizeMeteredCycleNow(prisma, sub, 'Plan changed by admin');
+  }
 
   return prisma.$transaction(async (tx) => {
     // Remove old components
@@ -232,7 +250,14 @@ export async function processPaidSubscriptionExpirations(prisma) {
   const graceCutoff = new Date(now.getTime() - graceDays * 86400000);
 
   const lapsed = await prisma.subscription.findMany({
-    where: { status: 'ACTIVE', currentPeriodEnd: { not: null, lt: now } },
+    where: {
+      status: 'ACTIVE',
+      currentPeriodEnd: { not: null, lt: now },
+      // METERED subs are excluded: their currentPeriodStart/End is the live
+      // arrears billing-cycle pointer, advanced by the cycle-close job — a
+      // past periodEnd there means "cycle awaiting close", not "lapsed".
+      planVersion: { plan: { planType: { not: 'METERED' } } },
+    },
     include: { planVersion: { include: { plan: true } } },
   });
 

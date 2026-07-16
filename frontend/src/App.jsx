@@ -20,6 +20,7 @@ import PlanDetail from './pages/plans/PlanDetail';
 import SubscriptionList from './pages/subscriptions/SubscriptionList';
 import SubscriptionDetail from './pages/subscriptions/SubscriptionDetail';
 import SubscriptionCreate from './pages/subscriptions/SubscriptionCreate';
+import MeteredBilling from './pages/billing/MeteredBilling';
 import InvoiceList from './pages/invoices/InvoiceList';
 import InvoiceDetail from './pages/invoices/InvoiceDetail';
 import CreditNoteList from './pages/creditNotes/CreditNoteList';
@@ -135,6 +136,7 @@ export default function App() {
                   <Route path="/subscriptions" element={<SubscriptionList />} />
                   <Route path="/subscriptions/new" element={<SubscriptionCreate />} />
                   <Route path="/subscriptions/:id" element={<SubscriptionDetail />} />
+                  <Route path="/metered" element={<MeteredBilling />} />
                   <Route path="/invoices" element={<InvoiceList />} />
                   <Route path="/invoices/:id" element={<InvoiceDetail />} />
                   <Route path="/credit-notes" element={<CreditNoteList />} />

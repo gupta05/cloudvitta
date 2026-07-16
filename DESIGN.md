@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for CloudVitta's design system. It describes the **actual implementation** (primarily `frontend/src/index.css`, `frontend/src/components/ui/`, `frontend/src/lib/`, and the component patterns used across pages), never an aspirational one. Whenever a significant UI/UX change lands — new tokens, components, layout patterns, animation conventions — update the affected sections here in the same piece of work.
 >
-> Last synchronized: 2026-07-16 (app-wide UI/UX consistency pass: shared component library, chart theme, date/byte formatters, mobile drawers, accessibility sweep).
+> Last synchronized: 2026-07-17 (Usage-Metered billing surfaces: metered plan cards, estimated-bill panel, usage-cycle chart, Pay Now invoice pattern, uploads-blocked banner, admin Metered Billing page — all composed from existing tokens/components, no new CSS classes).
 
 ---
 
@@ -189,6 +189,7 @@ Subtle, fast, and one-directional — motion communicates entry, never decorates
 - **Pagination:** `Pagination` under every paginated table.
 - **Accordions (FAQ):** bordered cards, chevron rotates when open, `aria-expanded`, panel fades in.
 - **Modals:** always the shared `Modal` (or `ConfirmDialog`); never hand-rolled overlays. The Razorpay "verifying payment" overlay is the one sanctioned bespoke overlay (non-dismissable, `role="dialog"` + `aria-label`).
+- **Metered billing surfaces** (portal Billing, `CustomerInvoiceDetail`, admin `MeteredBilling`): composed entirely from existing pieces — plan cards show `₹X/GB-month` via `formatRupees` with `Check`-bulleted arrears/cap explainers; the estimated-bill panel pairs a large accrued figure (`formatCurrency`) with projected/average/elapsed rows and the pricing formula in muted xs text; the current-cycle usage chart is the standard Recharts `AreaChart` (`chartTheme` tokens, Y-domain pinned to the cap); "Pay Now" is a `.btn-primary` with `IndianRupee` icon on FINALIZED/OVERDUE invoices; the uploads-blocked state is a `bg-cv-danger/10` bordered banner with `role="alert"` + inline Pay Now; cap-enforcement bars reuse `.progress-bar` with the danger fill at ≥98%; cycle statuses map to existing badge classes (OPEN→`badge-active`, INVOICING→`badge-pending`, INVOICED→`badge-paid`, CLOSED→`badge-void`).
 
 ## 13. Currency & Data Display Rules
 

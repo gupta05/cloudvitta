@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import {
   LayoutDashboard, Users, Package, FileText, CreditCard,
   Receipt, Tags, Puzzle, Activity, Settings, LogOut,
-  ChevronDown, Layers, Zap, HardDrive, FolderOpen, TrendingUp, Menu, X
+  ChevronDown, Layers, Zap, HardDrive, FolderOpen, TrendingUp, Menu, X, Gauge
 } from 'lucide-react';
 
 // Full admin navigation
@@ -21,6 +21,7 @@ const adminNavItems = [
   { to: '/catalog', icon: Package, label: 'Product Catalog' },
   { to: '/plans', icon: Layers, label: 'Plans' },
   { to: '/subscriptions', icon: CreditCard, label: 'Subscriptions' },
+  { to: '/metered', icon: Gauge, label: 'Metered Billing' },
   { to: '/invoices', icon: FileText, label: 'Invoices' },
   { to: '/credit-notes', icon: Receipt, label: 'Credit Notes' },
   { to: '/coupons', icon: Tags, label: 'Coupons' },

@@ -54,6 +54,7 @@ model Tenant {
   storageBuckets  StorageBucket[]
   payments        Payment[]
   transactions    Transaction[]
+  billingCycles   BillingCycle[]
 
   @@unique([slug, organizationId])
 }
@@ -136,7 +137,7 @@ model Plan {
   name            String
   description     String  @default("")
   status          String  @default("DRAFT") // DRAFT, ACTIVE, INACTIVE, ARCHIVED
-  planType        String  @default("STANDARD") // STANDARD, FREE, CUSTOM
+  planType        String  @default("STANDARD") // STANDARD, FREE, CUSTOM, METERED (arrears usage billing)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -238,11 +239,12 @@ model Subscription {
   customer    Customer    @relation(fields: [customerId], references: [id])
   planVersion PlanVersion @relation(fields: [planVersionId], references: [id])
 
-  components   SubscriptionComponent[]
-  addons       SubscriptionAddon[]
-  invoices     Invoice[]
-  payments     Payment[]
-  transactions Transaction[]
+  components    SubscriptionComponent[]
+  addons        SubscriptionAddon[]
+  invoices      Invoice[]
+  payments      Payment[]
+  transactions  Transaction[]
+  billingCycles BillingCycle[]
 }
 
 model SubscriptionComponent {
@@ -299,6 +301,7 @@ model Invoice {
   creditNotes  CreditNote[]
   payments     Payment[]
   transactions Transaction[]
+  billingCycle BillingCycle?
 }
 
 model InvoiceLine {
@@ -624,7 +627,7 @@ model Payment {
   subscriptionId    String?
   invoiceId         String?
   planVersionId     String?
-  purpose           String   @default("subscription_purchase") // subscription_purchase, renewal
+  purpose           String   @default("subscription_purchase") // subscription_purchase, renewal, invoice_payment
   razorpayOrderId   String   @unique
   razorpayPaymentId String?  @unique
   razorpaySignature String?
@@ -683,6 +686,40 @@ model Transaction {
 
   @@index([tenantId, customerId, createdAt])
   @@index([tenantId, type, createdAt])
+}
+
+// ─── Billing Cycles (metered arrears billing) ────────────
+// One row per metered-subscription billing period. Opened when the period
+// starts, closed by the scheduler after periodEnd: usage facts are frozen,
+// an invoice is generated (FINALIZED), and the next cycle is opened.
+// Unique (subscriptionId, periodStart) + status CAS make invoicing exactly-once.
+
+model BillingCycle {
+  id             String    @id @default(uuid())
+  tenantId       String
+  customerId     String
+  subscriptionId String
+  periodStart    DateTime
+  periodEnd      DateTime
+  status         String    @default("OPEN") // OPEN, INVOICING, INVOICED, CLOSED
+  invoiceId      String?   @unique
+  // Usage facts frozen at close time (audit/admin transparency)
+  avgGB          Float?
+  gbHours        Float?
+  peakGB         Float?
+  snapshotCount  Int?
+  amountCents    Int?      // integer paise
+  closedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  invoice      Invoice?     @relation(fields: [invoiceId], references: [id])
+
+  @@unique([subscriptionId, periodStart])
+  @@index([tenantId, status, periodEnd])
+  @@index([tenantId, customerId, periodStart])
 }
 
 // ─── Payment Webhook Events (dedup + audit) ──────────────

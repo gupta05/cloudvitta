@@ -122,9 +122,9 @@ export async function aggregateStorageUsage(prisma, tenantId, customerId, metric
 
     let avgGB = 0;
     let peakGB = 0;
+    let totalGBHours = 0;
 
     if (snapshots.length > 0) {
-      let totalGBHours = 0;
       for (let i = 0; i < snapshots.length; i++) {
         const currentGB = Number(snapshots[i].usedBytes) / (1024 * 1024 * 1024);
         peakGB = Math.max(peakGB, currentGB);
@@ -142,6 +142,8 @@ export async function aggregateStorageUsage(prisma, tenantId, customerId, metric
       });
       avgGB = buckets.reduce((sum, b) => sum + Number(b.usedBytes), 0) / (1024 * 1024 * 1024);
       peakGB = avgGB;
+      const totalHours = (periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60);
+      totalGBHours = avgGB * totalHours;
     }
 
     // Apply plan quota deduction
@@ -153,7 +155,11 @@ export async function aggregateStorageUsage(prisma, tenantId, customerId, metric
     return {
       value: Math.round(billableGB * 100) / 100,
       rawValue: Math.round(avgGB * 100) / 100,
+      // Higher-precision average for metered billing (2-dp rounding would distort the bill).
+      preciseAvgGB: avgGB,
       peakValue: Math.round(peakGB * 100) / 100,
+      gbHours: Math.round(totalGBHours * 100) / 100,
+      snapshotCount: snapshots.length,
       eventCount: snapshots.length,
       metricCode,
       aggregationType: 'GB_HOURS_AVG',

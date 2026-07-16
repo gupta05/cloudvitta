@@ -16,6 +16,9 @@ import { getRazorpay, getKeyId, isRazorpayConfigured } from './razorpayClient.js
 import { recordTransaction, TXN } from './ledger.js';
 import { generateInvoiceForSubscription } from './billing.js';
 import { downgradeToFreePlan } from './subscriptionLifecycle.js';
+// Circular import (billingCycles ← paymentService helpers) is safe: both sides
+// only call the other's hoisted function declarations at runtime.
+import { finalizeMeteredCycleNow } from './billingCycles.js';
 
 /**
  * Sum of flat-model price components, converted rupees → paise exactly once.
@@ -66,6 +69,12 @@ export async function notifyCustomerUsers(prisma, customerId, { type = 'billing'
 
 /**
  * Create a Razorpay order + local Payment row (status CREATED).
+ *
+ * Purposes:
+ *   subscription_purchase — upfront plan purchase (flat charge, prepaid plans)
+ *   renewal               — extend an existing paid subscription
+ *   invoice_payment       — pay an open (FINALIZED/OVERDUE) invoice, e.g. a
+ *                           metered arrears invoice. Amount = amountDueCents.
  */
 export async function createPaymentOrder(prisma, {
   tenantId,
@@ -73,15 +82,72 @@ export async function createPaymentOrder(prisma, {
   planVersionId,
   purpose = 'subscription_purchase',
   subscriptionId = null,
+  invoiceId = null,
 }) {
   if (!isRazorpayConfigured()) {
     throw new ApiError(503, 'Payment gateway is not configured');
   }
+  if (!['subscription_purchase', 'renewal', 'invoice_payment'].includes(purpose)) {
+    throw new ApiError(400, 'Invalid payment purpose');
+  }
+
+  // ── Invoice payment: amount comes from the invoice, not the plan ──
+  if (purpose === 'invoice_payment') {
+    if (!invoiceId) throw new ApiError(400, 'invoiceId is required for invoice payment');
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: invoiceId, tenantId, customerId },
+      include: { subscription: { include: { planVersion: { include: { plan: true } } } } },
+    });
+    if (!invoice) throw new ApiError(404, 'Invoice not found');
+    if (!['FINALIZED', 'OVERDUE'].includes(invoice.status)) {
+      throw new ApiError(400, `Invoice is ${invoice.status} and cannot be paid`);
+    }
+    if (invoice.amountDueCents <= 0) {
+      throw new ApiError(400, 'Invoice has no amount due');
+    }
+
+    let order;
+    try {
+      order = await getRazorpay().orders.create({
+        amount: invoice.amountDueCents, // paise
+        currency: invoice.currency || 'INR',
+        receipt: `cv_${Date.now()}_${customerId.slice(0, 8)}`,
+        payment_capture: 1,
+        notes: { tenantId, customerId, invoiceId, purpose },
+      });
+    } catch (err) {
+      console.error('[Payments] Razorpay order creation failed:', err.error?.description || err.message);
+      throw new ApiError(502, 'Failed to create payment order with the gateway');
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        tenantId,
+        customerId,
+        invoiceId: invoice.id,
+        subscriptionId: invoice.subscriptionId,
+        planVersionId: invoice.subscription?.planVersionId || null,
+        purpose,
+        razorpayOrderId: order.id,
+        amountCents: invoice.amountDueCents,
+        currency: invoice.currency || 'INR',
+        status: 'CREATED',
+      },
+    });
+
+    console.log(`[Payments] Order created ${order.id} (₹${(invoice.amountDueCents / 100).toFixed(2)}, invoice ${invoice.invoiceNumber}) for customer ${customerId}`);
+
+    return {
+      payment,
+      order,
+      keyId: getKeyId(),
+      planName: invoice.subscription?.planVersion?.plan?.name || 'Invoice',
+      invoiceNumber: invoice.invoiceNumber,
+    };
+  }
+
   if (!planVersionId) {
     throw new ApiError(400, 'planVersionId is required');
-  }
-  if (!['subscription_purchase', 'renewal'].includes(purpose)) {
-    throw new ApiError(400, 'Invalid payment purpose');
   }
 
   const planVersion = await prisma.planVersion.findUnique({
@@ -221,6 +287,13 @@ export async function processSuccessfulPayment(prisma, {
     return { payment: current, subscription: null, invoice: null, alreadyProcessed: false, amountMismatch: true };
   }
 
+  // ── Invoice payment: settle the invoice, no subscription changes ──
+  if (payment.purpose === 'invoice_payment') {
+    const invoice = await settleInvoiceFromPayment(prisma, payment, { razorpayOrderId, razorpayPaymentId, gatewayPayload, source });
+    const finalPayment = await prisma.payment.findUnique({ where: { razorpayOrderId } });
+    return { payment: finalPayment, subscription: null, invoice, alreadyProcessed: false };
+  }
+
   const { subscription, renewed, periodStart, periodEnd } = await activateOrRenewFromPayment(prisma, payment);
 
   // Ledger: money movement + subscription event.
@@ -286,6 +359,61 @@ export async function processSuccessfulPayment(prisma, {
 }
 
 /**
+ * Winner-only settlement of an invoice_payment capture: mark the invoice PAID
+ * and write the ledger rows. Never mutates the subscription — metered plans
+ * stay ACTIVE throughout; paying simply clears the arrears invoice (and lifts
+ * the overdue upload block, which is derived from invoice status).
+ */
+async function settleInvoiceFromPayment(prisma, payment, { razorpayOrderId, razorpayPaymentId, gatewayPayload, source }) {
+  const now = new Date();
+
+  await recordTransaction(prisma, {
+    tenantId: payment.tenantId,
+    customerId: payment.customerId,
+    type: TXN.PAYMENT_CAPTURED,
+    direction: 'CREDIT',
+    amountCents: payment.amountCents,
+    description: `Payment captured via Razorpay (${gatewayPayload?.method || 'unknown method'}) — invoice payment`,
+    paymentId: payment.id,
+    invoiceId: payment.invoiceId,
+    subscriptionId: payment.subscriptionId,
+    metadata: { razorpayOrderId, razorpayPaymentId, source },
+    idempotencyKey: `${payment.id}:PAYMENT_CAPTURED`,
+  });
+
+  let invoice = null;
+  if (payment.invoiceId) {
+    // Status-guarded settle: only an open invoice transitions to PAID.
+    const settled = await prisma.invoice.updateMany({
+      where: { id: payment.invoiceId, status: { in: ['FINALIZED', 'OVERDUE'] } },
+      data: { status: 'PAID', paidAt: now, amountDueCents: 0 },
+    });
+    invoice = await prisma.invoice.findUnique({ where: { id: payment.invoiceId } });
+
+    if (settled.count > 0 && invoice) {
+      await recordTransaction(prisma, {
+        tenantId: payment.tenantId,
+        customerId: payment.customerId,
+        type: TXN.INVOICE_PAID,
+        description: `Invoice ${invoice.invoiceNumber} paid via Razorpay`,
+        paymentId: payment.id,
+        invoiceId: invoice.id,
+        subscriptionId: payment.subscriptionId,
+        idempotencyKey: `${invoice.id}:PAID`,
+      });
+
+      notifyCustomerUsers(prisma, payment.customerId, {
+        title: 'Invoice paid',
+        message: `Your payment of ₹${(payment.amountCents / 100).toFixed(2)} for invoice ${invoice.invoiceNumber} was successful.${invoice.status === 'PAID' ? ' Any upload block from this invoice has been lifted.' : ''}`,
+        metadata: { paymentId: payment.id, invoiceId: invoice.id },
+      }).catch(() => {});
+    }
+  }
+
+  return invoice;
+}
+
+/**
  * Winner-only activation transaction. All reads happen before the transaction;
  * the transaction itself is write-only (keeps SQLite lock time minimal).
  */
@@ -303,6 +431,7 @@ async function activateOrRenewFromPayment(prisma, payment) {
       customerId: payment.customerId,
       status: { in: ['ACTIVE', 'TRIAL', 'PENDING'] },
     },
+    include: { planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } } },
   });
 
   // Renewal — explicit, or an ACTIVE sub already on this exact plan (handles
@@ -325,6 +454,13 @@ async function activateOrRenewFromPayment(prisma, payment) {
   }
 
   const periodEnd = addBillingPeriod(now, planVersion.billingPeriod);
+
+  // A metered subscription being replaced must be billed for its partial cycle
+  // BEFORE it is ENDED (the invoice engine only bills ACTIVE/TRIAL subs).
+  if (existing && existing.status === 'ACTIVE' && existing.planVersion?.plan?.planType === 'METERED') {
+    await finalizeMeteredCycleNow(prisma, existing, 'Plan changed (paid upgrade)');
+  }
+
   const subscription = await prisma.$transaction(async (tx) => {
     if (existing) {
       await tx.subscription.update({
@@ -458,6 +594,27 @@ export async function processRefund(prisma, {
   });
 
   const isFullRefund = amountCents >= payment.amountCents;
+
+  // Invoice payment refunded → the invoice is owed again. Reopen it as OVERDUE
+  // (its due date has typically passed; the derived upload block re-engages).
+  if (payment.purpose === 'invoice_payment' && payment.invoiceId) {
+    if (isFullRefund) {
+      const reopened = await prisma.invoice.updateMany({
+        where: { id: payment.invoiceId, status: 'PAID' },
+        data: { status: 'OVERDUE', paidAt: null, amountDueCents: payment.amountCents },
+      });
+      if (reopened.count > 0) {
+        console.log(`[Payments] Invoice ${payment.invoiceId} reopened as OVERDUE after full refund`);
+      }
+    }
+    notifyCustomerUsers(prisma, payment.customerId, {
+      title: 'Payment refunded',
+      message: `A refund of ₹${(amountCents / 100).toFixed(2)} has been processed.${isFullRefund ? ' The related invoice is due again.' : ''}`,
+      metadata: { paymentId: payment.id, razorpayRefundId },
+    }).catch(() => {});
+    return { updated: true, payment };
+  }
+
   if (isFullRefund && payment.subscriptionId) {
     const sub = await prisma.subscription.findUnique({
       where: { id: payment.subscriptionId },

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate, requireAdminOrMember } from '../middleware/auth.js';
 import { tenantContext, validateTenantAccess } from '../middleware/tenantContext.js';
+import { getMeteredEstimate } from '../services/billingCycles.js';
 
 const router = Router();
 router.use(authenticate, tenantContext, validateTenantAccess, requireAdminOrMember);
@@ -125,6 +126,150 @@ router.get('/', async (req, res, next) => {
           usedGB: Math.round(Number(b.usedBytes) / (1024 * 1024 * 1024) * 1000) / 1000,
         })),
       },
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/stats/metered — metered-billing operations dashboard:
+// customers, estimated revenue, billing cycles, metering health, cap enforcement.
+router.get('/metered', async (req, res, next) => {
+  try {
+    const prisma = req.app.locals.prisma;
+    const tenantId = req.tenantId;
+    const now = new Date();
+
+    // Active metered subscriptions with plan + customer context
+    const meteredSubs = await prisma.subscription.findMany({
+      where: {
+        tenantId,
+        status: 'ACTIVE',
+        planVersion: { plan: { planType: 'METERED' } },
+      },
+      include: {
+        customer: { select: { id: true, name: true, email: true } },
+        planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } },
+      },
+    });
+
+    // Overdue metered invoices (drive the upload block) — one query for all
+    const customerIds = meteredSubs.map((s) => s.customerId);
+    const overdueInvoices = customerIds.length ? await prisma.invoice.findMany({
+      where: { tenantId, customerId: { in: customerIds }, status: 'OVERDUE', amountDueCents: { gt: 0 } },
+      select: { id: true, customerId: true, invoiceNumber: true, amountDueCents: true, dueDate: true },
+    }) : [];
+    const overdueByCustomer = new Map(overdueInvoices.map((inv) => [inv.customerId, inv]));
+
+    // Current real-time storage per metered customer (cap enforcement view)
+    const bucketAggs = customerIds.length ? await prisma.storageBucket.groupBy({
+      by: ['customerId'],
+      where: { tenantId, customerId: { in: customerIds } },
+      _sum: { usedBytes: true },
+    }) : [];
+    const bytesByCustomer = new Map(bucketAggs.map((b) => [b.customerId, Number(b._sum.usedBytes || 0)]));
+
+    // Per-customer live estimates
+    const customers = [];
+    let accruedTotalCents = 0;
+    let projectedTotalCents = 0;
+    for (const sub of meteredSubs) {
+      const estimate = await getMeteredEstimate(prisma, sub).catch(() => null);
+      if (estimate) {
+        accruedTotalCents += estimate.accruedCents;
+        projectedTotalCents += estimate.projectedCents;
+      }
+      const currentBytes = bytesByCustomer.get(sub.customerId) || 0;
+      const currentGB = currentBytes / (1024 ** 3);
+      const capGB = estimate?.hardCapGB || 1;
+      const overdue = overdueByCustomer.get(sub.customerId) || null;
+      customers.push({
+        subscriptionId: sub.id,
+        customerId: sub.customerId,
+        customerName: sub.customer.name,
+        customerEmail: sub.customer.email,
+        periodStart: sub.currentPeriodStart,
+        periodEnd: sub.currentPeriodEnd,
+        avgGBSoFar: estimate?.avgGBSoFar ?? 0,
+        currentGB: Math.round(currentGB * 10000) / 10000,
+        capGB,
+        capUsagePercent: Math.min(100, Math.round((currentGB / capGB) * 100)),
+        atCap: currentGB >= capGB * 0.98,
+        accruedCents: estimate?.accruedCents ?? 0,
+        projectedCents: estimate?.projectedCents ?? 0,
+        pricePerGBMonth: estimate?.pricePerGBMonth ?? null,
+        uploadsBlocked: Boolean(overdue),
+        overdueInvoice: overdue,
+      });
+    }
+
+    // Billed metered revenue (paid + outstanding)
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const [paidAgg, outstandingAgg] = await Promise.all([
+      prisma.invoice.aggregate({
+        where: { tenantId, status: 'PAID', paidAt: { gte: monthStart }, billingCycle: { isNot: null } },
+        _sum: { totalCents: true },
+      }),
+      prisma.invoice.aggregate({
+        where: { tenantId, status: { in: ['FINALIZED', 'OVERDUE'] }, billingCycle: { isNot: null } },
+        _sum: { amountDueCents: true },
+      }),
+    ]);
+
+    // Recent billing cycles
+    const cycles = await prisma.billingCycle.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: 25,
+      include: {
+        subscription: { include: { customer: { select: { name: true } } } },
+        invoice: { select: { id: true, invoiceNumber: true, status: true, totalCents: true, amountDueCents: true } },
+      },
+    });
+
+    // Metering health: snapshot recency + coverage
+    const [lastSnapshot, snapshots24h, coveredCustomers] = await Promise.all([
+      prisma.storageSnapshot.findFirst({ orderBy: { snapshotTime: 'desc' }, select: { snapshotTime: true } }),
+      prisma.storageSnapshot.count({ where: { tenantId, snapshotTime: { gte: new Date(now.getTime() - 86400000) } } }),
+      prisma.storageSnapshot.groupBy({
+        by: ['customerId'],
+        where: { tenantId, bucketId: null, snapshotTime: { gte: new Date(now.getTime() - 86400000) } },
+      }),
+    ]);
+    const lastSnapshotAgeMinutes = lastSnapshot
+      ? Math.round((now.getTime() - lastSnapshot.snapshotTime.getTime()) / 60000)
+      : null;
+
+    res.json({
+      customers,
+      revenue: {
+        accruedCents: accruedTotalCents,          // open cycles, earned so far
+        projectedCents: projectedTotalCents,      // open cycles, projected at cycle end
+        paidThisMonthCents: paidAgg._sum.totalCents || 0,
+        outstandingCents: outstandingAgg._sum.amountDueCents || 0,
+      },
+      cycles: cycles.map((c) => ({
+        id: c.id,
+        customerName: c.subscription.customer.name,
+        status: c.status,
+        periodStart: c.periodStart,
+        periodEnd: c.periodEnd,
+        avgGB: c.avgGB,
+        gbHours: c.gbHours,
+        peakGB: c.peakGB,
+        snapshotCount: c.snapshotCount,
+        amountCents: c.amountCents,
+        closedAt: c.closedAt,
+        invoice: c.invoice,
+      })),
+      health: {
+        lastSnapshotAt: lastSnapshot?.snapshotTime || null,
+        lastSnapshotAgeMinutes,
+        // Snapshots run every 15 min; >30 min old means the metering cron is unhealthy.
+        healthy: lastSnapshotAgeMinutes != null && lastSnapshotAgeMinutes <= 30,
+        snapshots24h,
+        customersCovered24h: coveredCustomers.length,
+      },
+      meteredCustomerCount: meteredSubs.length,
+      blockedCustomerCount: customers.filter((c) => c.uploadsBlocked).length,
     });
   } catch (err) { next(err); }
 });

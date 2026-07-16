@@ -13,14 +13,13 @@ import { aggregateUsage, aggregateStorageUsage } from './metering.js';
 import { recordTransaction, TXN } from './ledger.js';
 
 /**
- * Generate an invoice for a subscription.
- * @param {PrismaClient} prisma
- * @param {string} subscriptionId
- * @param {string} tenantId
- * @param {Date} periodStart - defaults to start of current billing period
- * @param {Date} periodEnd - defaults to end of current billing period
+ * Preview the charges for a subscription over a period WITHOUT writing anything.
+ * This is the single calculation path shared by invoice generation and the
+ * portal's live charge estimate — keeping estimate ≡ invoice by construction.
+ *
+ * Returns { sub, lines, subtotalCents, discountCents, totalCents, taxCents, periodStart, periodEnd }.
  */
-export async function generateInvoiceForSubscription(prisma, subscriptionId, tenantId, periodStart, periodEnd) {
+export async function previewCharges(prisma, subscriptionId, tenantId, periodStart, periodEnd) {
   const sub = await prisma.subscription.findUnique({
     where: { id: subscriptionId },
     include: {
@@ -39,7 +38,7 @@ export async function generateInvoiceForSubscription(prisma, subscriptionId, ten
 
   if (!sub) throw new Error('Subscription not found');
   if (!['ACTIVE', 'TRIAL'].includes(sub.status)) {
-    throw new Error(`Cannot generate invoice for subscription in ${sub.status} status`);
+    throw new Error(`Cannot calculate charges for subscription in ${sub.status} status`);
   }
 
   // Calculate billing period
@@ -74,7 +73,7 @@ export async function generateInvoiceForSubscription(prisma, subscriptionId, ten
   }
 
   // Calculate subtotal
-  let subtotalCents = lines.reduce((sum, line) => sum + line.totalCents, 0);
+  const subtotalCents = lines.reduce((sum, line) => sum + line.totalCents, 0);
 
   // Apply coupon discount
   let discountCents = 0;
@@ -101,7 +100,23 @@ export async function generateInvoiceForSubscription(prisma, subscriptionId, ten
   const totalCents = Math.max(0, subtotalCents - discountCents);
   const taxCents = 0; // Tax calculation can be added later
 
+  return { sub, lines, subtotalCents, discountCents, totalCents, taxCents, periodStart: start, periodEnd: end };
+}
+
+/**
+ * Generate an invoice for a subscription.
+ * @param {PrismaClient} prisma
+ * @param {string} subscriptionId
+ * @param {string} tenantId
+ * @param {Date} periodStart - defaults to start of current billing period
+ * @param {Date} periodEnd - defaults to end of current billing period
+ */
+export async function generateInvoiceForSubscription(prisma, subscriptionId, tenantId, periodStart, periodEnd) {
+  const { sub, lines, subtotalCents, totalCents, taxCents, periodStart: start, periodEnd: end } =
+    await previewCharges(prisma, subscriptionId, tenantId, periodStart, periodEnd);
+
   // Calculate due date
+  const now = new Date();
   const dueDate = new Date(now);
   dueDate.setDate(dueDate.getDate() + sub.netTermsDays);
 
@@ -243,6 +258,37 @@ async function calculatePriceComponent(prisma, priceComponent, pricing, subscrip
         metadata: JSON.stringify({
           priceComponentId: priceComponent.id, model: 'per_unit',
           metricCode: priceComponent.billableMetric?.code,
+        }),
+      });
+      break;
+    }
+
+    case 'metered_gb_month': {
+      // Pay-as-you-go storage: bill the time-weighted average GB stored over the
+      // period (GB-hours / period-hours) at ₹pricePerGBMonth per GB-month.
+      // Usage is defensively capped at hardCapGB — uploads are already blocked at
+      // the cap in real time, so avg can never legitimately exceed it.
+      const pricePerGBMonth = pricing.pricePerGBMonth || 0;
+      if (!priceComponent.billableMetric) break;
+
+      const usage = await getUsage(priceComponent.billableMetric.code);
+      const measuredGB = usage.preciseAvgGB ?? usage.rawValue ?? usage.value; // full average, no quota deduction
+      const billedGB = Math.min(measuredGB, pricing.hardCapGB || Infinity);
+      const totalCents = Math.round(billedGB * pricePerGBMonth * 100);
+
+      lines.push({
+        name: `Metered Storage — ${billedGB.toFixed(3)} GB avg`,
+        description: `${billedGB.toFixed(3)} GB avg × ₹${pricePerGBMonth}/GB-month (time-weighted${pricing.hardCapGB ? `, capped at ${pricing.hardCapGB} GB` : ''})`,
+        quantity: billedGB,
+        unitPriceCents: Math.round(pricePerGBMonth * 100),
+        totalCents,
+        metadata: JSON.stringify({
+          priceComponentId: priceComponent.id, model: 'metered_gb_month',
+          metricCode: priceComponent.billableMetric.code,
+          avgGB: measuredGB, billedGB,
+          gbHours: usage.gbHours ?? null, peakGB: usage.peakValue ?? null,
+          snapshotCount: usage.snapshotCount ?? null,
+          pricePerGBMonth, hardCapGB: pricing.hardCapGB ?? null,
         }),
       });
       break;

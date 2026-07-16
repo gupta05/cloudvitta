@@ -155,6 +155,7 @@ class ApiClient {
 
   // ─── Stats ─────────────────────────────
   getStats() { return this.get('/stats'); }
+  getMeteredStats() { return this.get('/stats/metered'); }
 
   // ─── API Tokens ────────────────────────
   getApiTokens() { return this.get('/api-tokens'); }
@@ -270,6 +271,7 @@ class ApiClient {
   removePaymentMethod(id) { return this.del(`/portal/billing/payment-methods/${id}`); }
   setDefaultPaymentMethod(id) { return this.put(`/portal/billing/payment-methods/${id}/default`); }
   getCurrentCharges() { return this.get('/portal/billing/charges'); }
+  getMeteredUsage() { return this.get('/portal/billing/metered'); }
   downloadInvoice(id) { return this.get(`/portal/billing/invoices/${id}/download`); }
 
   // ─── Portal Payments (Razorpay) ──────

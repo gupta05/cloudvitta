@@ -22,19 +22,22 @@ const router = express.Router();
 router.use(authenticate, tenantContext, validateTenantAccess, requireUser);
 
 /**
- * POST /create-order — create a Razorpay order for a paid plan purchase/renewal.
+ * POST /create-order — create a Razorpay order for a paid plan purchase/renewal,
+ * or for paying an open invoice (purpose 'invoice_payment' + invoiceId — used
+ * by metered arrears invoices).
  */
 router.post('/create-order', async (req, res, next) => {
   try {
     const prisma = req.app.locals.prisma;
-    const { planVersionId, purpose, subscriptionId } = req.body;
+    const { planVersionId, purpose, subscriptionId, invoiceId } = req.body;
 
-    const { payment, order, keyId, planName } = await createPaymentOrder(prisma, {
+    const { payment, order, keyId, planName, invoiceNumber } = await createPaymentOrder(prisma, {
       tenantId: req.tenantId,
       customerId: req.customerId,
       planVersionId,
       purpose: purpose || 'subscription_purchase',
       subscriptionId: subscriptionId || null,
+      invoiceId: invoiceId || null,
     });
 
     const customer = await prisma.customer.findUnique({ where: { id: req.customerId } });
@@ -45,6 +48,7 @@ router.post('/create-order', async (req, res, next) => {
       currency: payment.currency,
       keyId,
       planName,
+      invoiceNumber: invoiceNumber || null,
       prefill: {
         name: customer?.name || '',
         email: req.user.email || customer?.email || '',

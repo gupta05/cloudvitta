@@ -13,6 +13,7 @@ import cron from 'node-cron';
 import { generateInvoiceForSubscription } from './billing.js';
 import { processTrialExpirations, processPaidSubscriptionExpirations } from './subscriptionLifecycle.js';
 import { snapshotStorageUsage } from './storageMeter.js';
+import { closeDueCycles } from './billingCycles.js';
 import { cleanupExpiredRegistrations } from './otpService.js';
 
 /**
@@ -57,6 +58,20 @@ export function startScheduler(prisma) {
     }
   });
 
+  // Run every hour (:45): close due metered billing cycles (arrears invoicing).
+  // Scan-based (periodEnd < now), so missed runs catch up automatically after
+  // restarts/downtime; CAS claims + unique constraints keep it exactly-once.
+  cron.schedule('45 * * * *', async () => {
+    try {
+      const result = await closeDueCycles(prisma);
+      if (result.closed > 0) {
+        console.log(`[Scheduler] Metered cycles: ${result.closed} invoiced (${result.scanned} scanned)`);
+      }
+    } catch (err) {
+      console.error('[Scheduler] Metered cycle close error:', err.message);
+    }
+  });
+
   // Run daily at 2 AM: detect overdue invoices
   cron.schedule('0 2 * * *', async () => {
     try {
@@ -82,11 +97,14 @@ export function startScheduler(prisma) {
       const now = new Date();
       const today = now.getDate();
 
-      // Find active subscriptions whose billing day is today
+      // Find active subscriptions whose billing day is today.
+      // METERED plans are excluded — they are invoiced in arrears by the
+      // cycle-close job (:45), never by this prepaid billing-day job.
       const dueSubscriptions = await prisma.subscription.findMany({
         where: {
           status: 'ACTIVE',
           billingDay: today,
+          planVersion: { plan: { planType: { not: 'METERED' } } },
         },
         include: { planVersion: true },
       });
@@ -130,5 +148,30 @@ export function startScheduler(prisma) {
     }
   });
 
-  console.log('⏰ Scheduler started: storage snapshots (every 15min), trial expiration (hourly), paid-sub expiry (hourly :30), overdue (daily 2AM), invoicing (daily 3AM), registration cleanup (daily 4AM)');
+  // Run daily at 4:30 AM: prune old storage snapshots.
+  // Per-bucket rows (drill-down charts only) are kept 30 days; per-customer
+  // aggregate rows (the billing source of truth) are kept 13 months so any
+  // past cycle in the retention window can be re-derived/audited.
+  cron.schedule('30 4 * * *', async () => {
+    try {
+      const now = Date.now();
+      const bucketCutoff = new Date(now - 30 * 86400000);
+      const aggregateCutoff = new Date(now - 396 * 86400000); // ~13 months
+      const [bucketPruned, aggregatePruned] = await Promise.all([
+        prisma.storageSnapshot.deleteMany({
+          where: { bucketId: { not: null }, snapshotTime: { lt: bucketCutoff } },
+        }),
+        prisma.storageSnapshot.deleteMany({
+          where: { bucketId: null, snapshotTime: { lt: aggregateCutoff } },
+        }),
+      ]);
+      if (bucketPruned.count > 0 || aggregatePruned.count > 0) {
+        console.log(`[Scheduler] Snapshot retention: pruned ${bucketPruned.count} bucket rows (>30d), ${aggregatePruned.count} aggregate rows (>13mo)`);
+      }
+    } catch (err) {
+      console.error('[Scheduler] Snapshot retention error:', err.message);
+    }
+  });
+
+  console.log('⏰ Scheduler started: storage snapshots (every 15min), trial expiration (hourly), paid-sub expiry (hourly :30), metered cycle close (hourly :45), overdue (daily 2AM), invoicing (daily 3AM), registration cleanup (daily 4AM), snapshot retention (daily 4:30AM)');
 }

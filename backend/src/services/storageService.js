@@ -162,7 +162,7 @@ export async function deleteBucket(prisma, tenantId, bucketId) {
 
 /**
  * Upload an object to a bucket via Oracle Cloud Object Storage.
- * Enforces: global 15 GB cap → plan hard cap → bucket quota.
+ * Enforces: global 15 GB cap → plan hard cap → metered overdue block → bucket quota.
  * Automatically meters: storage_put_ops, storage_ingress_bytes, storage_bytes_stored
  */
 export async function uploadObject(prisma, tenantId, bucket, file, objectKey, userMetadata = {}) {
@@ -186,7 +186,7 @@ export async function uploadObject(prisma, tenantId, bucket, file, objectKey, us
   // ── GUARD 2: Plan-level hard cap (e.g., Free = 500 MB, Pro = 1 GB) ──
   const activeSub = await prisma.subscription.findFirst({
     where: { tenantId, customerId: bucket.customerId, status: { in: ['ACTIVE', 'TRIAL'] } },
-    include: { planVersion: { include: { priceComponents: { include: { billableMetric: true } } } } },
+    include: { planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } } },
   });
   if (activeSub) {
     const storageComponent = activeSub.planVersion.priceComponents.find(
@@ -212,6 +212,26 @@ export async function uploadObject(prisma, tenantId, bucket, file, objectKey, us
           );
         }
       }
+    }
+  }
+
+  // ── GUARD 2.5: Metered dunning — block uploads while an arrears invoice is overdue ──
+  // Derived dynamically from invoice status (no state to sync): paying the
+  // invoice flips it to PAID and uploads resume on the next request.
+  if (activeSub?.planVersion?.plan?.planType === 'METERED') {
+    const overdueInvoice = await prisma.invoice.findFirst({
+      where: { tenantId, customerId: bucket.customerId, status: 'OVERDUE', amountDueCents: { gt: 0 } },
+      select: { id: true, invoiceNumber: true, amountDueCents: true },
+      orderBy: { dueDate: 'asc' },
+    });
+    if (overdueInvoice) {
+      throw Object.assign(
+        new Error(
+          `Uploads are blocked: invoice ${overdueInvoice.invoiceNumber} (₹${(overdueInvoice.amountDueCents / 100).toFixed(2)}) is overdue. ` +
+          `Pay it from the Billing page to resume uploads. Your stored files remain accessible.`
+        ),
+        { status: 402 } // 402 Payment Required
+      );
     }
   }
 

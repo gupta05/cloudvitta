@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for understanding this project across development sessions. Whenever a significant change lands — new feature, architectural change, integration, refactor, schema modification, infra/deployment change, security improvement, pricing update, auth change — **update the relevant sections of this file in the same piece of work**. It must always describe the *current* implementation, never an aspirational or outdated one.
 >
-> Last synchronized: 2026-07-16 (deploy-readiness: DB switched SQLite→PostgreSQL (`schema.prisma` provider + `directUrl`; clean port — UUID PKs, JSON-as-String, BigInt, no SQLite-only constructs); env-driven CORS via `FRONTEND_URL`; frontend API base via `VITE_API_URL` (origin + `/api`, dev proxy fallback); Netlify `_redirects` SPA fallback; env templates + §3/§4/§9/§12/§19/§21/§25/§26 updated. Target stack: Netlify + Render + Neon, all free-tier).
+> Last synchronized: 2026-07-17 (Usage-Metered pay-as-you-go billing: new METERED plan type billed in arrears at ₹200/GB-month on time-weighted average storage with a 1 GB hard cap; `BillingCycle` model (30 models now); `metered_gb_month` pricing model + shared `previewCharges()`; hourly cycle-close cron + snapshot retention; `invoice_payment` Razorpay purpose with portal "Pay Now"; overdue-invoice upload blocking (402); portal metered usage view + admin Metered Billing page; §9–§14, §17, §23 updated).
 
 ---
 
@@ -35,11 +35,11 @@ zoho project/
 │   ├── src/
 │   │   ├── server.js       # Express entry point
 │   │   ├── routes/         # 25 route files
-│   │   ├── services/       # billing, storage, metering, scheduler, email, OTP, webhooks
+│   │   ├── services/       # billing, billingCycles (metered arrears), storage, metering, scheduler, email, OTP, webhooks
 │   │   ├── middleware/     # auth.js, tenantContext.js
 │   │   └── utils/errors.js # ApiError + global error handler
 │   ├── prisma/
-│   │   ├── schema.prisma   # 29 models, PostgreSQL
+│   │   ├── schema.prisma   # 30 models, PostgreSQL
 │   │   ├── seed.js         # production baseline: env-driven admin + catalog/plans (no demo users)
 │   │   └── dev.db          # legacy local SQLite file (gitignored; unused after Postgres switch)
 │   └── .env                # local secrets (gitignored)
@@ -133,7 +133,7 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 - **One physical OCI bucket** (`OCI_S3_BUCKET`); "buckets" in the app are DB rows (`StorageBucket`) acting as key prefixes. Key format: `{tenantId}/{customerId}/{bucketName}/{objectKey}` (sanitized against `..` traversal).
 - Client: `backend/src/services/ociStorageClient.js` — AWS SDK v3 S3 client, `forcePathStyle: true`, against `OCI_S3_ENDPOINT`. `verifyOCIConnection()` (HeadBucket) runs at boot; failure warns but doesn't stop the server.
 - **Upload lifecycle:** multipart POST (`file` field) → multer disk temp (`os.tmpdir()/cloudvitta-uploads`, **100 MB limit**) → quota checks → SHA-256 checksum → `PutObjectCommand` → upsert `StorageObject` row → increment bucket `usedBytes`/`objectCount` → auto-meter `storage_put_ops` + `storage_ingress_bytes` → unlink temp file.
-- **Quota enforcement, in order:** (1) **global platform cap** `GLOBAL_STORAGE_CAP_GB` (default 15 GB, all users combined) → HTTP 507; (2) **plan hard cap** from the active subscription's storage component `hardCapGB` → HTTP 413; (3) bucket `quotaBytes` (only enforced with no active sub).
+- **Quota enforcement, in order:** (1) **global platform cap** `GLOBAL_STORAGE_CAP_GB` (default 15 GB, all users combined) → HTTP 507; (2) **plan hard cap** from the active subscription's storage component `hardCapGB` (model-agnostic — applies to Free, Pro, and Usage-Metered alike) → HTTP 413; (2.5) **metered dunning block** — METERED customer with an OVERDUE invoice (`amountDueCents > 0`) → HTTP 402 (derived from invoice status; paying unblocks immediately; downloads/deletes unaffected); (3) bucket `quotaBytes` (only enforced with no active sub).
 - **Download:** proxied stream through the backend (Content-Disposition, ETag, X-Checksum-SHA256) + meters `storage_get_ops`/`storage_egress_bytes`. **No presigned URLs anywhere.** `StorageBucket.isPublic` exists in schema but is never used.
 - Deletes: OCI delete (warn on failure) + soft delete of `StorageObject` + counter decrement. `deleteBucket` requires empty, then sweeps orphan OCI keys under the prefix.
 
@@ -145,12 +145,20 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 - `BillableMetric` aggregation types: COUNT, SUM, MAX, UNIQUE_COUNT, AVERAGE — computed **in JavaScript** over full event fetches (`services/metering.js`; a known scaling limit at high event volume).
 - Seeded metric codes: `storage_bytes_stored` (MAX), `storage_put_ops`/`storage_get_ops`/`storage_delete_ops` (COUNT), `storage_egress_bytes`/`storage_ingress_bytes` (SUM). **Bandwidth (egress/ingress) is internal-only — always excluded from invoices, portal plans, and charges** (surfaced only in admin storage stats).
 
-**Billing engine** (`backend/src/services/billing.js` — `generateInvoiceForSubscription`):
-- Only ACTIVE/TRIAL subs. Period derived from `billingDay` (MONTHLY/QUARTERLY/ANNUAL).
-- Pricing models per `PriceComponent.pricingModel` JSON: **flat**, **per_unit** (with included-quota overage labeling), **tiered**, **per_thousand**, **package**. Prices in JSON are **whole-rupee floats**, converted to paise (`×100`) at invoice time.
+**Billing engine** (`backend/src/services/billing.js`):
+- **`previewCharges(prisma, subscriptionId, tenantId, periodStart, periodEnd)`** — the single, write-free calculation path: iterates price components, computes lines/subtotal/discount/total. Used by BOTH `generateInvoiceForSubscription` and the portal `/charges` estimate, so live estimates always match invoices by construction.
+- `generateInvoiceForSubscription` — wraps `previewCharges` in the invoice transaction. Only ACTIVE/TRIAL subs. Period derived from `billingDay` (MONTHLY/QUARTERLY/ANNUAL) unless explicitly passed.
+- Pricing models per `PriceComponent.pricingModel` JSON: **flat**, **per_unit** (with included-quota overage labeling), **tiered**, **per_thousand**, **package**, and **`metered_gb_month`** (`{model:'metered_gb_month', pricePerGBMonth, hardCapGB}` — bills the time-weighted average GB over the period at ₹/GB-month, defensively capped at `hardCapGB`; line metadata records avgGB/gbHours/peakGB/snapshotCount/rate/cap for invoice transparency). Prices in JSON are **whole-rupee floats**, converted to paise (`×100`) at invoice time.
 - Addons: `priceCents × quantity` per line. Coupons: PERCENTAGE or FIXED_AMOUNT (paise), negative line, floor at 0.
-- **`taxCents = 0`** (placeholder), **no proration**, invoice numbers `INV-00001` generated **inside the transaction** using `MAX(invoiceNumber)+1` (race-safe). Due date = now + `netTermsDays` (default 30). Created DRAFT with lines in a transaction.
+- **`taxCents = 0`** (placeholder), **no proration**, invoice numbers `INV-00001` generated **inside the transaction** using `MAX(invoiceNumber)+1` (race-safe). Due date = now + `netTermsDays` (default 30; metered subs get 7). Created DRAFT with lines in a transaction.
 - Invoice statuses: DRAFT → FINALIZED → PAID / VOID; FINALIZED past due → OVERDUE (cron).
+
+**Metered arrears billing** (`backend/src/services/billingCycles.js`):
+- **`BillingCycle`** row per metered-subscription period: OPEN → INVOICING (CAS claim) → INVOICED. Unique `(subscriptionId, periodStart)`. Opened at subscribe time; `Subscription.currentPeriodStart/End` doubles as the live cycle pointer (anniversary-anchored, no proration).
+- **`closeDueCycles`** (hourly cron :45): scan-based (`periodEnd < now`, plus stale INVOICING claims >1 h for crash recovery) → CAS-claims each cycle → generates the invoice for the exact cycle window (reusing any invoice already created by a crashed run — exactly-once) → **FINALIZES** it (due in `METERED_NET_TERMS_DAYS` = 7; ₹0 invoices are auto-PAID so they never dun) → freezes usage facts (avgGB/gbHours/peakGB/snapshotCount/amountCents) on the cycle → advances the sub's period and opens the next cycle → notifies the customer.
+- **`finalizeMeteredCycleNow`** — bills the partial cycle (periodStart→now) whenever a metered sub leaves ACTIVE (portal cancel, plan switch, paid upgrade); called while the sub is still ACTIVE, opens no next cycle.
+- **`getMeteredEstimate`** — live accrued (`gbHoursSoFar/periodHours × rate`) + projected (current GB held constant to period end) estimates, both capped at `hardCapGB`; consistent with the invoice formula.
+- **Dunning:** overdue metered invoice (cron flips FINALIZED→OVERDUE past due date) ⇒ **new uploads are blocked with HTTP 402** (guard 2.5 in `storageService.uploadObject`, derived from invoice status — no state to sync); downloads/deletes still work; paying the invoice unblocks immediately. Metered customers are never auto-downgraded.
 
 ## 10. Subscription & Pricing Model
 
@@ -161,6 +169,8 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
   |---|---|---|---|---|
   | Free | ₹0/mo | **500 MB** hard cap (`500/1024` GB) | — | 1K PUT / 10K GET |
   | Pro | **₹200/mo** (flat `price: 200` → 20000 paise) | **1 GB** hard cap | 7 days | 5K PUT / 50K GET |
+  | Usage-Metered | **₹200/GB-month** (arrears, `metered_gb_month`) | **1 GB** hard cap, no prepaid quota | — | 5K PUT / 50K GET |
+- **Usage-Metered plan** (`planType: 'METERED'`): no flat component (`computePlanChargeCents` = 0 ⇒ activates via the free `/subscribe` path — correct, arrears billing needs no upfront payment; `createPaymentOrder` still rejects it for plan purchase). Billed at cycle end on the **time-weighted average storage** (15-min snapshots → GB-hours ÷ period hours): 700 MB avg → ₹140, 350 MB → ₹70. Cycle = subscription anniversary (subscribe date → +1 month). The **1 GB cap is enforced in real time at upload** exactly like Free/Pro via `hardCapGB` in the pricing JSON (guard is model-agnostic). Metered subs are **excluded** from the paid-expiry downgrade cron and the 3 AM prepaid auto-invoice cron (their `currentPeriodEnd` is a cycle pointer, not a paid-through date).
 - Seeded addons: Priority Support ₹500/mo (RECURRING), Custom Domain ₹100 (ONETIME). Coupons: WELCOME20 (20%), FREEUPGRADE (100%).
 - Plans are versioned (`Plan → PlanVersion → PriceComponent[]`); publishing a new version deactivates the old one. Plan statuses: DRAFT/ACTIVE.
 - **Subscription state machine** (`services/subscriptionLifecycle.js`): PENDING→ACTIVE/CANCELLED; TRIAL→ACTIVE/CANCELLED; ACTIVE→PAUSED/CANCELLED/ENDED; PAUSED→ACTIVE/CANCELLED. (PAUSED is defined but no route sets it.)
@@ -171,6 +181,8 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 **Real Razorpay integration, env-driven** — swapping to Live Mode requires only changing `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET`. No secrets in code; the checkout `key_id` is delivered to the browser via the create-order API response (no VITE_ var).
 
 **Flow:** portal "Upgrade to Pro" → `POST /api/portal/billing/payments/create-order` (creates Razorpay order, paise, `payment_capture: 1` + local `Payment` row status CREATED) → checkout.js modal (dynamically loaded, `frontend/src/lib/razorpay.js`) → on success the browser calls `POST .../verify`, where the backend recomputes `HMAC-SHA256(order_id|payment_id, key_secret)` before any subscription change. The webhook (`POST /api/payments/webhook/razorpay`, public, raw-body, HMAC-verified against `RAZORPAY_WEBHOOK_SECRET`, mounted before `express.json` in server.js) is the redundant path for the same capture, plus `payment.failed` / `refund.processed`.
+
+**Payment purposes:** `subscription_purchase` (upfront plan buy), `renewal` (extend paid period), and **`invoice_payment`** (pay an open FINALIZED/OVERDUE invoice — the metered arrears collection path; amount = `invoice.amountDueCents`, requires `invoiceId`, plan-charge validation skipped). On `invoice_payment` capture the invoice is settled PAID (status-guarded updateMany) + `PAYMENT_CAPTURED`/`INVOICE_PAID` ledger rows — **no subscription mutation**; the overdue upload block lifts automatically. A **full refund** of an invoice payment reopens the invoice as OVERDUE (block re-engages) instead of downgrading the plan.
 
 **Security invariant:** a paid subscription is only activated after backend HMAC verification. `POST /portal/billing/subscribe` returns **402** for any plan with a nonzero flat charge (free plans only). The backend re-fetches the payment entity from Razorpay on the verify path and checks the captured amount against the expected `amountCents` (mismatch → captured-but-not-activated, flagged for review).
 
@@ -184,7 +196,7 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 
 `PaymentMethod` rows remain display-only card records (portal form); real charges go through Razorpay checkout. Local dev: the verify endpoint carries the happy path without any tunnel; webhook-only events (refunds) require exposing `/api/payments/webhook/razorpay` via a tunnel (e.g. ngrok) and configuring it in the Razorpay dashboard with events `payment.captured`, `payment.failed`, `refund.processed`.
 
-## 12. Database Schema (Prisma, PostgreSQL — 29 models)
+## 12. Database Schema (Prisma, PostgreSQL — 30 models)
 
 Key facts: string pseudo-enums (portable from the original SQLite design), JSON stored as String columns (app parses), BigInt for bytes, money as integer paise.
 
@@ -192,12 +204,12 @@ Key facts: string pseudo-enums (portable from the original SQLite design), JSON 
 |---|---|
 | Identity | `Organization` → `Tenant` (currency INR default) → `User` (role, isVerified, deactivatedAt, optional customerId link), `UserSession`, `PendingRegistration`, `PasswordResetRequest` |
 | Catalog | `ProductFamily`, `Product`, `BillableMetric` (code unique per tenant), `Plan` → `PlanVersion` (billingPeriod, trialDays, currency) → `PriceComponent` (feeType + `pricingModel` JSON + optional metric) |
-| Customers/Billing | `Customer` (currency INR, balanceCents, JSON addresses, alias unique per tenant), `Subscription` (+ `currentPeriodStart`/`currentPeriodEnd` paid-through tracking, `autoRenew` (reserved), `SubscriptionComponent` with unused `pricingOverride`, `SubscriptionAddon`), `Invoice` → `InvoiceLine`, `CreditNote`, `Coupon`, `Addon`, `InvoicingEntity` (1:1 tenant letterhead — seeded as Indian entity: GSTIN `29ABCDE1234F1Z5`, Bengaluru, country IN), `PaymentMethod` (display-only card records) |
-| Payments/Ledger | `Payment` (one row per Razorpay order; `razorpayOrderId`/`razorpayPaymentId` unique; status CREATED/CAPTURED/FAILED/CANCELLED/REFUNDED; amountCents paise; gatewayResponse JSON; links to Subscription + Invoice), `Transaction` (immutable append-only ledger; type + direction CREDIT/DEBIT/NEUTRAL; unique `idempotencyKey`; links to Payment/Invoice/Subscription), `PaymentWebhookEvent` (unique `razorpayEventId` dedup + raw payload audit; PROCESSING/PROCESSED/ERROR) |
+| Customers/Billing | `Customer` (currency INR, balanceCents, JSON addresses, alias unique per tenant), `Subscription` (+ `currentPeriodStart`/`currentPeriodEnd` paid-through tracking — doubles as the live cycle pointer for METERED subs, `autoRenew` (reserved), `SubscriptionComponent` with unused `pricingOverride`, `SubscriptionAddon`), `Invoice` → `InvoiceLine`, **`BillingCycle`** (metered arrears cycle: status OPEN/INVOICING/INVOICED, unique `[subscriptionId, periodStart]`, frozen usage facts avgGB/gbHours/peakGB/snapshotCount/amountCents, unique `invoiceId` link; indexes `[tenantId, status, periodEnd]` + `[tenantId, customerId, periodStart]`), `CreditNote`, `Coupon`, `Addon`, `InvoicingEntity` (1:1 tenant letterhead — seeded as Indian entity: GSTIN `29ABCDE1234F1Z5`, Bengaluru, country IN), `PaymentMethod` (display-only card records) |
+| Payments/Ledger | `Payment` (one row per Razorpay order; `purpose` subscription_purchase/renewal/invoice_payment; `razorpayOrderId`/`razorpayPaymentId` unique; status CREATED/CAPTURED/FAILED/CANCELLED/REFUNDED; amountCents paise; gatewayResponse JSON; links to Subscription + Invoice), `Transaction` (immutable append-only ledger; type + direction CREDIT/DEBIT/NEUTRAL; unique `idempotencyKey`; links to Payment/Invoice/Subscription), `PaymentWebhookEvent` (unique `razorpayEventId` dedup + raw payload audit; PROCESSING/PROCESSED/ERROR) |
 | Storage/Metering | `StorageBucket` (denormalized usedBytes/objectCount, quotaBytes, unused isPublic), `StorageObject` (unique [bucketId, key], soft-delete, sha256), `StorageSnapshot` (GB-hour source), `UsageEvent` (indexed [tenantId, customerId, eventCode, timestamp]) |
 | Misc | `ApiToken` (SHA-256 hash + prefix), `WebhookEndpoint` (secret + events JSON), `Notification`, `NotificationPreference` (13 toggles), `UserPreference` |
 
-Workflow: **`prisma db push`** (no migrations). Seed (`prisma/seed.js`) provisions a **production baseline**: it reads `ADMIN_EMAIL`/`ADMIN_PASSWORD` from `backend/.env`, upserts a **single administrator** (`role: 'admin'`, bcrypt-12 hashed password, verified — idempotent, never duplicates, never overwrites an existing admin's password), and seeds only the product catalog (Object Storage family + metrics), the Free/Pro plans, add-ons, coupons, and the invoicing entity. It **creates no demo customers, subscriptions, invoices, usage events, or end-user accounts**, and purges any legacy demo accounts (`admin@`/`member@cloudvitta.dev`, `user@acme.com`, `user@techstart.io`, and the `acme`/`techstart`/`dataflow` customers) from older dev databases. Real end-user accounts created via public signup are preserved; their catalog/billing/storage rows are reset. The seed **exits with an error** if `ADMIN_EMAIL`/`ADMIN_PASSWORD` are missing or invalid.
+Workflow: **`prisma db push`** (no migrations). Seed (`prisma/seed.js`) provisions a **production baseline**: it reads `ADMIN_EMAIL`/`ADMIN_PASSWORD` from `backend/.env`, upserts a **single administrator** (`role: 'admin'`, bcrypt-12 hashed password, verified — idempotent, never duplicates, never overwrites an existing admin's password), and seeds only the product catalog (Object Storage family + metrics), the Free/Pro/Usage-Metered plans, add-ons, coupons, and the invoicing entity. It **creates no demo customers, subscriptions, invoices, usage events, or end-user accounts**, and purges any legacy demo accounts (`admin@`/`member@cloudvitta.dev`, `user@acme.com`, `user@techstart.io`, and the `acme`/`techstart`/`dataflow` customers) from older dev databases. Real end-user accounts created via public signup are preserved; their catalog/billing/storage rows are reset. The seed **exits with an error** if `ADMIN_EMAIL`/`ADMIN_PASSWORD` are missing or invalid.
 
 ## 13. API Architecture
 
@@ -209,10 +221,10 @@ All under `/api`, JSON, Bearer JWT + `x-tenant-id` (admins). 25 routers mounted 
 | Org/tenant | `/api/organizations`, `/api/tenants` |
 | Catalog | `/api/product-families`, `/api/products`, `/api/billable-metrics`, `/api/plans` (CRUD + publish + versions), `/api/coupons`, `/api/addons` |
 | Billing | `/api/customers`, `/api/subscriptions` (activate/cancel/change-plan/addons), `/api/invoices` (generate/finalize/mark-paid/void), `/api/credit-notes` |
-| Metering | `/api/events` (ingest/list/usage), `/api/stats` (admin dashboard MRR/revenue) |
+| Metering | `/api/events` (ingest/list/usage), `/api/stats` (admin dashboard MRR/revenue), `/api/stats/metered` (metered customers + estimated revenue + cycles + metering health + cap enforcement) |
 | Storage | `/api/storage` (buckets, objects upload/download/meta, usage, history, stats) |
 | Platform | `/api/api-tokens`, `/api/webhooks`, `/api/settings` (invoicing entity), `/api/users` (admin user mgmt) |
-| Portal (requireUser) | `/api/portal` (dashboard/subscription/invoices/usage/activity/api-keys), `/api/portal/account` (profile/password/sessions/delete), `/api/portal/settings`, `/api/portal/billing` (plans/subscribe [free only, 402 for paid]/cancel/payment-methods/charges/invoice download), `/api/portal/billing/payments` (create-order/verify/failure/history GET / + transactions), `/api/portal/notifications` |
+| Portal (requireUser) | `/api/portal` (dashboard/subscription/invoices/usage/activity/api-keys), `/api/portal/account` (profile/password/sessions/delete), `/api/portal/settings`, `/api/portal/billing` (plans/subscribe [free & metered only, 402 for flat-priced]/cancel/payment-methods/charges [previewCharges-backed]/metered [live cycle estimate + daily usage + closed cycles]/invoice download), `/api/portal/billing/payments` (create-order [plan purchase, renewal, or invoice_payment]/verify/failure/history GET / + transactions), `/api/portal/notifications` |
 | Payments (public) | `POST /api/payments/webhook/razorpay` — raw-body, HMAC-authenticated Razorpay webhook (mounted before `express.json`) |
 | Health | `GET /api/health` |
 
@@ -225,7 +237,8 @@ Frontend client: `frontend/src/api/client.js` — singleton fetch wrapper, ~100 
 - **Layouts:** `AppLayout` (admin sidebar `w-64`, sectioned nav, **tenant switcher** → `setTenantId` + full reload with outside-click/Esc close, `/auth/me` re-sync on mount) vs `CustomerLayout` (portal sidebar `w-64`, **notification bell** with unread badge polled every 30s, lucide notification icons). Both shells: server-side logout (`api.logout()` + full `cv_*` cleanup) and a **mobile drawer** (hamburger topbar below `md`, `role="dialog"` drawer with backdrop/Esc close).
 - **Design system:** entirely in `src/index.css` — Tailwind v4 `@theme` with `cv-*` tokens (`bg #09090b`, primary `#3b82f6`, data-viz `cv-viz-purple #8b5cf6`), component classes (`.glass-card`, `.card-header`, `.data-table`, `.badge badge-{status}`, `.btn` (+`.btn-spinner`, `:disabled`), `.icon-btn`/`.icon-chip`, `.form-input`, `.tab-group`/`.tab-pill`, `.skeleton`, `.dropzone`, `.progress-bar`, landing `.landing-grid-bg`/`.reveal`, `:focus-visible` outlines, `prefers-reduced-motion` support). **Dark-only** — no light mode. Documented in root **`DESIGN.md`** (living document, keep in sync).
 - **Shared UI components** (`components/ui/`): `LoadingSpinner`, `ErrorBanner`, `Modal`, `ConfirmDialog` (replaces all native `confirm()`), `StatCard`, `EmptyState`, `PageHeader`, `TabPills`, `Pagination` (used by all paginated lists), `Skeleton`/`TableSkeleton`, `OtpInput` (+`OtpExpiryBar`/`OtpResend`). Shared libs (`lib/`): `currency.js` (`formatCurrency` paise / `formatRupees` rupees), `format.js` (`formatBytes`, `formatDate` — single `en-IN` locale), `chartTheme.js` (Recharts colors/tooltip mirroring tokens), `uiMaps.js` (`ROLE_BADGES`, `PAYMENT_BADGES`, `EVENT_LABELS`, `getFileIcon`, `parseUA`).
-- **Charts:** Recharts themed via `lib/chartTheme.js` (Dashboard revenue line ₹, subs bar; storage area/pie charts).
+- **Charts:** Recharts themed via `lib/chartTheme.js` (Dashboard revenue line ₹, subs bar; storage area/pie charts; portal metered daily-usage area chart).
+- **Metered billing UI:** portal Billing shows metered-aware plan cards (₹/GB-month pricing, arrears explainer, 1 GB cap bullets), an Estimated Bill panel (accrued + projected + formula), a current-cycle daily usage chart, previous cycles, a "Pay Now" button on FINALIZED/OVERDUE invoices (Razorpay `invoice_payment` checkout), and a red uploads-blocked banner when an invoice is overdue. `CustomerInvoiceDetail` renders a "Usage Calculation" transparency card from the metered line's metadata (avgGB, GB-hours, peak, rate, snapshot count, cap) + Pay Now. Admin gets **`pages/billing/MeteredBilling.jsx`** at `/metered` (nav: Metered Billing) — KPI cards (customers, accrued/projected revenue, outstanding, metering health), a metered-customers table with live cap-enforcement bars and blocked badges, and a billing-cycles table; the admin Dashboard links to it via a summary strip.
 - **Uploads:** native HTML5 drag-drop (admin `BucketDetail` whole-page drop; portal `CustomerBucketDetail` accessible dropzone card — `role="button"`, keyboard-triggerable) → multipart FormData. Downloads via blob + Content-Disposition parsing.
 - **Toasts:** sonner, top-right, styled via `cv-*` CSS vars, with viewport-overflow hardening (maxWidth calc, word-break) in main.jsx + index.css.
 - **Accessibility baseline:** modals with focus management, `htmlFor`/`id` on form fields, `aria-label` on icon buttons, `role="switch"` toggles, `role="alert"`/`role="status"` on error/loading states, skeleton loaders for tables.
@@ -247,10 +260,12 @@ Frontend client: `frontend/src/api/client.js` — singleton fetch wrapper, ~100 
 |---|---|
 | `*/15 * * * *` | `snapshotStorageUsage` — StorageSnapshot rows for GB-hour billing |
 | `0 * * * *` | `processTrialExpirations` — TRIAL past trialEndDate → ACTIVE (free plans) or downgrade to Free (unpaid paid-plan trials) |
-| `30 * * * *` | `processPaidSubscriptionExpirations` — grace-window renewal reminders; past grace → downgrade to Free |
+| `30 * * * *` | `processPaidSubscriptionExpirations` — grace-window renewal reminders; past grace → downgrade to Free (**METERED subs excluded**) |
+| `45 * * * *` | `closeDueCycles` — metered arrears invoicing: close cycles past periodEnd, finalize invoices, advance periods (scan-based; catches up missed runs) |
 | `0 2 * * *` | FINALIZED invoices past dueDate → OVERDUE |
-| `0 3 * * *` | Auto-generate invoices for ACTIVE subs where `billingDay` = today (skips if period already invoiced) |
+| `0 3 * * *` | Auto-generate invoices for ACTIVE subs where `billingDay` = today (skips if period already invoiced; **METERED subs excluded**) |
 | `0 4 * * *` | Cleanup `PendingRegistration` rows older than 24h |
+| `30 4 * * *` | Snapshot retention — prune per-bucket snapshots >30 days, per-customer aggregates (billing source) >13 months |
 
 ## 18. Webhooks & API Tokens (scaffolded, NOT live)
 
@@ -325,6 +340,9 @@ npm run db:studio      # Prisma Studio
 10. **DB records are the financial source of truth** — Payments/Transactions/Invoices drive all billing UI and reporting; gateway responses are persisted (`Payment.gatewayResponse`, `PaymentWebhookEvent.payload`) but never rendered live.
 11. **Claim-guard idempotency over locks** — payment capture uses an atomic status-guarded `updateMany` (CAS) instead of interactive transactions, avoiding SQLite lock contention between the verify endpoint and the webhook; webhook event-id dedup and ledger idempotency keys are the second and third layers.
 12. **Downgrade-to-Free on expiry** (not hard-cancel) — a lapsed paid sub keeps the account functional at 500 MB; existing files remain, over-quota uploads get 413.
+13. **Arrears billing via BillingCycle rows, not a queue** — metered cycles are closed by a scan-based hourly cron (`periodEnd < now`) with CAS status claims and a unique `(subscriptionId, periodStart)` constraint: exactly-once invoicing that self-heals after crashes/downtime without any job persistence.
+14. **Derived dunning state** — the metered upload block is computed from invoice status (OVERDUE + amountDueCents > 0) at upload time instead of a flag on the customer; paying the invoice unblocks with zero synchronization code.
+15. **Estimate ≡ invoice by construction** — the portal `/charges` estimate and invoice generation share one calculation function (`previewCharges`), eliminating the drift that existed when `/charges` reimplemented pricing.
 
 ## 24. Known Limitations & Assumptions
 

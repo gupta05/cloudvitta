@@ -21,6 +21,8 @@
  * Plans:
  *   - Free: 500 MB storage, ₹0/mo (hard cap)
  *   - Pro: 1 GB storage, ₹200/mo (hard cap)
+ *   - Usage-Metered: pay-as-you-go, ₹200 per GB-month (time-weighted average,
+ *     billed at cycle end, 1 GB hard cap)
  * Global platform cap: 15 GB (all users combined)
  */
 import { PrismaClient } from '@prisma/client';
@@ -101,6 +103,7 @@ async function seed() {
     prisma.paymentMethod.deleteMany(),
     prisma.invoiceLine.deleteMany(),
     prisma.creditNote.deleteMany(),
+    prisma.billingCycle.deleteMany(),
     prisma.invoice.deleteMany(),
     prisma.usageEvent.deleteMany(),
     prisma.subscriptionAddon.deleteMany(),
@@ -222,6 +225,25 @@ async function seed() {
   });
   console.log('✓ Product catalog & plans created (Free 500 MB, Pro 1 GB — ₹200/mo)');
 
+  // USAGE-METERED: pay-as-you-go — ₹200 per GB-month billed in arrears on the
+  // time-weighted average storage of each billing cycle. Same 1 GB hard cap as
+  // Pro, enforced in real time at upload via hardCapGB (model-agnostic guard).
+  const meteredPlan = await prisma.plan.create({
+    data: { tenantId: t, productFamilyId: storageFamily.id, name: 'Usage-Metered', planType: 'METERED', status: 'ACTIVE', description: 'Pay only for what you use — ₹200 per GB-month, billed at the end of each cycle, 1 GB max' },
+  });
+  const meteredVersion = await prisma.planVersion.create({
+    data: { planId: meteredPlan.id, version: 1, billingPeriod: 'MONTHLY', trialDays: 0, isActive: true, currency: 'INR' },
+  });
+  await prisma.priceComponent.createMany({
+    data: [
+      { planVersionId: meteredVersion.id, name: 'Metered Storage (₹200/GB-month, 1 GB max)', feeType: 'USAGE', billableMetricId: storageMetric.id, pricingModel: JSON.stringify({ model: 'metered_gb_month', pricePerGBMonth: 200, hardCapGB: 1 }) },
+      { planVersionId: meteredVersion.id, name: 'PUT/POST Operations', feeType: 'USAGE', billableMetricId: putOpsMetric.id, pricingModel: JSON.stringify({ model: 'per_thousand', pricePerThousand: 0, includedOps: 5000 }) },
+      { planVersionId: meteredVersion.id, name: 'GET/HEAD Operations', feeType: 'USAGE', billableMetricId: getOpsMetric.id, pricingModel: JSON.stringify({ model: 'per_thousand', pricePerThousand: 0, includedOps: 50000 }) },
+      // Egress is tracked internally (metric + events) but NOT a billable plan component.
+    ],
+  });
+  console.log('✓ Usage-Metered plan created (₹200/GB-month, arrears billing, 1 GB cap)');
+
   // ─── Add-ons ────────────────────────────────────────────────────────────
   await prisma.addon.createMany({
     data: [
@@ -297,7 +319,7 @@ async function seed() {
   console.log('\n🔐 Administrator sign-in:');
   console.log(`   Email:    ${admin.email}`);
   console.log('   Password: (the ADMIN_PASSWORD you configured — change it after first login)');
-  console.log('\n📦 Storage plans: Free (500 MB), Pro (1 GB — ₹200/mo)');
+  console.log('\n📦 Storage plans: Free (500 MB), Pro (1 GB — ₹200/mo), Usage-Metered (₹200/GB-month, 1 GB cap)');
   console.log('🌐 Global platform cap: 15 GB (all users combined)');
 }
 

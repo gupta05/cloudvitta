@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CreditCard, FileText, ChevronRight, HardDrive, Zap, Download as DownloadIcon, Package, Check, Star, Plus, Trash2, AlertTriangle, Receipt, RefreshCw } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { CreditCard, FileText, ChevronRight, HardDrive, Zap, Download as DownloadIcon, Package, Check, Star, Plus, Trash2, AlertTriangle, Receipt, RefreshCw, Gauge, IndianRupee, Info } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
@@ -12,6 +13,7 @@ import { formatCurrency, formatRupees } from '../../lib/currency';
 import { formatDate } from '../../lib/format';
 import { PAYMENT_BADGES } from '../../lib/uiMaps';
 import { loadRazorpayScript } from '../../lib/razorpay';
+import { PRIMARY, GRID_STROKE, AXIS_STROKE, TOOLTIP_STYLE } from '../../lib/chartTheme';
 import { toast } from 'sonner';
 
 export default function CustomerBilling() {
@@ -24,6 +26,7 @@ export default function CustomerBilling() {
   const [charges, setCharges] = useState(null);
   const [payments, setPayments] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [metered, setMetered] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -65,6 +68,14 @@ export default function CustomerBilling() {
       setCharges(chargesRes);
       setPayments(payRes?.data || []);
       setTransactions(txnRes?.data || []);
+
+      // Metered-billing view (404 when not on a metered plan)
+      const isMeteredSub = subRes?.subscription?.planVersion?.plan?.planType === 'METERED';
+      if (isMeteredSub) {
+        try { setMetered(await api.getMeteredUsage()); } catch { setMetered(null); }
+      } else {
+        setMetered(null);
+      }
     } catch (err) {
       setError(err.message || 'Failed to load billing data');
     } finally {
@@ -81,6 +92,7 @@ export default function CustomerBilling() {
   let quotaGB = 0;
   let includedOps = 0;
   let planPriceValue = 0;
+  const isMetered = subscription?.planVersion?.plan?.planType === 'METERED';
 
   if (subscription) {
     planName = subscription.planVersion?.plan?.name || 'Unknown';
@@ -88,6 +100,10 @@ export default function CustomerBilling() {
     for (const comp of (subscription.planVersion?.priceComponents || [])) {
       const pricing = JSON.parse(comp.pricingModel || '{}');
       if (pricing.model === 'flat') { planPrice = formatRupees(pricing.price || 0); planPriceValue = pricing.price || 0; }
+      if (pricing.model === 'metered_gb_month') {
+        planPrice = `${formatRupees(pricing.pricePerGBMonth || 0)}/GB`;
+        if (pricing.hardCapGB && !quotaGB) quotaGB = pricing.hardCapGB;
+      }
       // Storage quota = the storage the plan grants (includedGB), falling back to hardCapGB.
       if (pricing.includedGB) quotaGB = pricing.includedGB;
       else if (pricing.hardCapGB && !quotaGB) quotaGB = pricing.hardCapGB;
@@ -154,6 +170,60 @@ export default function CustomerBilling() {
             toast.success(purpose === 'renewal'
               ? `${order.planName} plan renewed!`
               : `Payment successful — ${order.planName} plan is now active!`);
+          } catch (err) {
+            toast.error(`Payment received but verification failed: ${err.message}. Reference: ${resp.razorpay_payment_id} — it will be confirmed automatically.`);
+          } finally {
+            setVerifying(false);
+            fetchData();
+          }
+        },
+      });
+
+      rzp.on('payment.failed', (resp) => {
+        api.reportPaymentFailure({
+          razorpay_order_id: order.orderId,
+          code: resp.error?.code || null,
+          description: resp.error?.description || null,
+        }).catch(() => {});
+        toast.error(resp.error?.description || 'Payment failed. Please try again.');
+      });
+
+      rzp.open();
+    } catch (err) { toast.error(err.message); }
+    finally { setSubscribing(false); }
+  };
+
+  // Pay an open (FINALIZED/OVERDUE) invoice — used by metered arrears invoices.
+  const payInvoice = async (inv) => {
+    setSubscribing(true);
+    try {
+      const order = await api.createPaymentOrder({ purpose: 'invoice_payment', invoiceId: inv.id });
+      await loadRazorpayScript();
+
+      const rzp = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amountCents, // already in paise — never multiply
+        currency: order.currency,
+        name: 'CloudVitta',
+        description: `Invoice ${order.invoiceNumber || inv.invoiceNumber} — usage charges`,
+        order_id: order.orderId,
+        prefill: order.prefill,
+        theme: { color: '#3b82f6' },
+        modal: {
+          ondismiss: () => {
+            api.reportPaymentFailure({ razorpay_order_id: order.orderId, cancelled: true }).catch(() => {});
+            toast.info('Payment cancelled — you have not been charged');
+          },
+        },
+        handler: async (resp) => {
+          setVerifying(true);
+          try {
+            await api.verifyPayment({
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            toast.success(`Invoice ${inv.invoiceNumber} paid!`);
           } catch (err) {
             toast.error(`Payment received but verification failed: ${err.message}. Reference: ${resp.razorpay_payment_id} — it will be confirmed automatically.`);
           } finally {
@@ -278,6 +348,26 @@ export default function CustomerBilling() {
       {/* ─── Overview Tab ─── */}
       {tab === 'overview' && (
         <div className="space-y-6">
+          {/* Overdue invoice → uploads blocked banner (metered dunning) */}
+          {metered?.uploadsBlocked && metered.overdueInvoice && (
+            <div className="p-4 rounded-lg bg-cv-danger/10 border border-cv-danger/30 flex flex-wrap items-center justify-between gap-3" role="alert">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-cv-danger shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-cv-danger">Uploads are blocked — invoice overdue</p>
+                  <p className="text-xs text-cv-text-secondary mt-1">
+                    Invoice {metered.overdueInvoice.invoiceNumber} ({formatCurrency(metered.overdueInvoice.amountDueCents)}) was due {formatDate(metered.overdueInvoice.dueDate)}.
+                    Pay it to resume uploads — your stored files remain accessible.
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => payInvoice({ id: metered.overdueInvoice.id, invoiceNumber: metered.overdueInvoice.invoiceNumber })}
+                disabled={subscribing} className="btn btn-primary btn-sm shrink-0">
+                <IndianRupee size={12} /> Pay Now
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Current Plan */}
             <div className="lg:col-span-2 glass-card p-6">
@@ -301,7 +391,18 @@ export default function CustomerBilling() {
                 </div>
               )}
 
-              {subscription?.currentPeriodEnd && (() => {
+              {/* Metered plans: currentPeriodEnd is the live billing cycle, not a paid-through date */}
+              {isMetered && subscription?.currentPeriodEnd && (
+                <div className="p-3 rounded-lg bg-cv-info/10 border border-cv-info/20 mb-4">
+                  <p className="text-xs text-cv-info flex items-center gap-1.5">
+                    <Gauge size={12} />
+                    Billing cycle: {formatDate(subscription.currentPeriodStart)} — {formatDate(subscription.currentPeriodEnd, 'long')}.
+                    You'll be invoiced at the end of the cycle for your measured usage.
+                  </p>
+                </div>
+              )}
+
+              {!isMetered && subscription?.currentPeriodEnd && (() => {
                 const periodEnd = new Date(subscription.currentPeriodEnd);
                 const daysLeft = Math.ceil((periodEnd - Date.now()) / 86400000);
                 const expiringSoon = daysLeft <= 7;
@@ -353,8 +454,30 @@ export default function CustomerBilling() {
 
             {/* Charges */}
             <div className="glass-card p-6">
-              <h3 className="text-sm font-semibold text-cv-text mb-4">Current Charges</h3>
-              {charges?.charges?.length > 0 ? (
+              <h3 className="text-sm font-semibold text-cv-text mb-4">{isMetered ? 'Estimated Bill' : 'Current Charges'}</h3>
+              {isMetered && metered?.estimate ? (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-3xl font-bold text-cv-accent">{formatCurrency(metered.estimate.accruedCents)}</p>
+                    <p className="text-xs text-cv-text-muted mt-1">accrued so far this cycle</p>
+                  </div>
+                  <div className="flex items-center justify-between text-sm pt-3 border-t border-cv-border">
+                    <span className="text-cv-text-secondary">Projected at cycle end</span>
+                    <span className="font-mono text-cv-text">{formatCurrency(metered.estimate.projectedCents)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-cv-text-secondary">Average storage</span>
+                    <span className="font-mono text-cv-text">{metered.estimate.avgGBSoFar.toFixed(3)} GB</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-cv-text-secondary">Cycle elapsed</span>
+                    <span className="font-mono text-cv-text">{metered.estimate.elapsedPct}%</span>
+                  </div>
+                  <div className="pt-3 border-t border-cv-border">
+                    <p className="text-xs text-cv-text-muted">{metered.formula}</p>
+                  </div>
+                </div>
+              ) : charges?.charges?.length > 0 ? (
                 <div className="space-y-3">
                   {charges.charges.map((c, i) => (
                     <div key={i} className="flex items-center justify-between text-sm">
@@ -372,6 +495,81 @@ export default function CustomerBilling() {
               )}
             </div>
           </div>
+
+          {/* ─── Metered usage detail (metered plans only) ─── */}
+          {isMetered && metered && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Usage chart for the current cycle */}
+              <div className="lg:col-span-2 glass-card p-6">
+                <h3 className="text-sm font-semibold text-cv-text mb-1 flex items-center gap-2">
+                  <Gauge size={16} className="text-cv-accent" /> Usage This Cycle
+                </h3>
+                <p className="text-xs text-cv-text-muted mb-4">
+                  Daily storage measurements — your bill is the time-weighted average of these, capped at {metered.estimate.hardCapGB} GB
+                </p>
+                {metered.dailyUsage.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={metered.dailyUsage}>
+                      <defs>
+                        <linearGradient id="meteredGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor={PRIMARY} stopOpacity={0.2} />
+                          <stop offset="95%" stopColor={PRIMARY} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+                      <XAxis dataKey="day" stroke={AXIS_STROKE} fontSize={11} />
+                      <YAxis stroke={AXIS_STROKE} fontSize={11} tickFormatter={(v) => `${v} GB`} domain={[0, metered.estimate.hardCapGB || 'auto']} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${v.toFixed(3)} GB`, 'Storage']} />
+                      <Area type="monotone" dataKey="usedGB" stroke={PRIMARY} strokeWidth={2} fill="url(#meteredGrad)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-52 text-cv-text-muted text-sm">
+                    Usage measurements appear here as snapshots accrue (every 15 minutes)
+                  </div>
+                )}
+              </div>
+
+              {/* Pricing explainer + recent cycles */}
+              <div className="space-y-6">
+                <div className="glass-card p-5">
+                  <h3 className="text-sm font-semibold text-cv-text mb-3 flex items-center gap-2">
+                    <Info size={14} className="text-cv-info" /> How metered billing works
+                  </h3>
+                  <ul className="space-y-2 text-xs text-cv-text-secondary">
+                    <li>• Your storage is measured every 15 minutes throughout the cycle.</li>
+                    <li>• At the end of the cycle you're billed the <strong className="text-cv-text">time-weighted average</strong> at {formatRupees(metered.estimate.pricePerGBMonth)}/GB-month.</li>
+                    <li>• Example: 700 MB average ≈ {formatRupees(metered.estimate.pricePerGBMonth * 0.7)} — you never prepay.</li>
+                    <li>• Storage is <strong className="text-cv-text">capped at {metered.estimate.hardCapGB} GB</strong> and cannot be exceeded.</li>
+                    <li>• Invoices are due within 7 days; overdue invoices block new uploads.</li>
+                  </ul>
+                </div>
+
+                {metered.cycles.length > 0 && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-sm font-semibold text-cv-text mb-3">Previous Cycles</h3>
+                    <div className="space-y-2">
+                      {metered.cycles.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between text-xs">
+                          <span className="text-cv-text-secondary">{formatDate(c.periodStart)} — {formatDate(c.periodEnd)}</span>
+                          <span className="flex items-center gap-2">
+                            <span className="font-mono text-cv-text-muted">{(c.avgGB ?? 0).toFixed(2)} GB</span>
+                            {c.invoice ? (
+                              <Link to={`/portal/billing/${c.invoice.id}`} className="font-mono text-cv-primary hover:text-cv-primary-hover">
+                                {formatCurrency(c.amountCents || 0)}
+                              </Link>
+                            ) : (
+                              <span className="font-mono text-cv-text">{formatCurrency(c.amountCents || 0)}</span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -391,16 +589,44 @@ export default function CustomerBilling() {
                   <p className="text-xs text-cv-text-muted mt-1">{plan.description || plan.planType}</p>
                 </div>
                 <div className="mb-4">
-                  <span className="text-3xl font-bold text-cv-text">{formatRupees(plan.monthlyPrice)}</span>
-                  <span className="text-sm text-cv-text-muted">/{plan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</span>
+                  {plan.isMetered ? (
+                    <>
+                      <span className="text-3xl font-bold text-cv-text">{formatRupees(plan.pricePerGBMonth || 0)}</span>
+                      <span className="text-sm text-cv-text-muted">/GB-month</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-3xl font-bold text-cv-text">{formatRupees(plan.monthlyPrice)}</span>
+                      <span className="text-sm text-cv-text-muted">/{plan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</span>
+                    </>
+                  )}
                 </div>
                 <div className="space-y-2 mb-6 text-sm">
-                  <div className="flex items-center gap-2 text-cv-text-secondary">
-                    <Check size={14} className="text-cv-success" /> {plan.storageGB} GB Storage
-                  </div>
-                  <div className="flex items-center gap-2 text-cv-text-secondary">
-                    <Check size={14} className="text-cv-success" /> {plan.includedOps.toLocaleString()} Operations/mo
-                  </div>
+                  {plan.isMetered ? (
+                    <>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> Pay only for measured usage
+                      </div>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> Billed at end of each cycle
+                      </div>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> {plan.storageGB} GB hard cap
+                      </div>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> {plan.includedOps.toLocaleString()} Operations/mo
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> {plan.storageGB} GB Storage
+                      </div>
+                      <div className="flex items-center gap-2 text-cv-text-secondary">
+                        <Check size={14} className="text-cv-success" /> {plan.includedOps.toLocaleString()} Operations/mo
+                      </div>
+                    </>
+                  )}
                   {plan.trialDays > 0 && (
                     <div className="flex items-center gap-2 text-cv-info">
                       <Star size={14} /> {plan.trialDays}-day free trial
@@ -411,7 +637,7 @@ export default function CustomerBilling() {
                   <button className="btn btn-secondary w-full cursor-default opacity-60" disabled>Current Plan</button>
                 ) : (
                   <button onClick={() => setChangingPlan(plan)} className="btn btn-primary w-full">
-                    {subscription ? (plan.monthlyPrice > planPriceValue ? 'Upgrade' : plan.monthlyPrice < planPriceValue ? 'Downgrade' : 'Switch') : 'Subscribe'}
+                    {plan.isMetered ? 'Switch to Pay-as-you-go' : subscription ? (plan.monthlyPrice > planPriceValue ? 'Upgrade' : plan.monthlyPrice < planPriceValue ? 'Downgrade' : 'Switch') : 'Subscribe'}
                   </button>
                 )}
               </div>
@@ -446,10 +672,16 @@ export default function CustomerBilling() {
                     <td className="text-cv-text-muted">{formatDate(inv.dueDate)}</td>
                     <td>
                       <div className="flex items-center gap-2">
+                        {['FINALIZED', 'OVERDUE'].includes(inv.status) && inv.amountDueCents > 0 && (
+                          <button onClick={() => payInvoice(inv)} disabled={subscribing}
+                            className="btn btn-primary btn-sm flex items-center gap-1">
+                            <IndianRupee size={12} /> Pay Now
+                          </button>
+                        )}
                         <Link to={`/portal/billing/${inv.id}`} className="text-cv-primary hover:text-cv-primary-hover text-xs font-medium flex items-center gap-1">
                           View <ChevronRight size={12} />
                         </Link>
-                        <button onClick={() => handleDownloadInvoice(inv)} className="text-cv-text-muted hover:text-cv-text text-xs flex items-center gap-1">
+                        <button onClick={() => handleDownloadInvoice(inv)} className="text-cv-text-muted hover:text-cv-text text-xs flex items-center gap-1" aria-label={`Download invoice ${inv.invoiceNumber}`}>
                           <DownloadIcon size={12} />
                         </button>
                       </div>
@@ -597,18 +829,21 @@ export default function CustomerBilling() {
         {changingPlan && (
           <>
             <p className="text-sm text-cv-text-muted mb-4">
-              {(changingPlan.monthlyPrice || 0) > 0 ? (
+              {changingPlan.isMetered ? (
+                <>You'll switch to <strong>{changingPlan.name}</strong> — pay-as-you-go billing. Nothing is charged now: at the end of each billing cycle you'll receive an invoice for your <strong>measured average storage</strong> at <strong>{formatRupees(changingPlan.pricePerGBMonth || 0)}/GB-month</strong> (e.g. 700 MB average ≈ {formatRupees((changingPlan.pricePerGBMonth || 0) * 0.7)}). Storage is capped at <strong>{changingPlan.storageGB} GB</strong> and cannot be exceeded.</>
+              ) : (changingPlan.monthlyPrice || 0) > 0 ? (
                 <>You'll be charged <strong>{formatRupees(changingPlan.monthlyPrice)}</strong> now via Razorpay secure checkout. Your <strong>{changingPlan.name}</strong> plan activates immediately after payment.</>
               ) : (
                 <>You'll be switched to the <strong>{changingPlan.name}</strong> plan at <strong>{formatRupees(changingPlan.monthlyPrice)}/{changingPlan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</strong>.</>
               )}
               {subscription && ' Your current subscription will be ended.'}
+              {subscription && isMetered && ' Your usage so far this cycle will be invoiced.'}
             </p>
             <div className="flex gap-3 justify-end">
               <button onClick={() => setChangingPlan(null)} className="btn btn-secondary">Cancel</button>
               <button onClick={() => handleSubscribe(changingPlan)} className="btn btn-primary" disabled={subscribing}>
                 {subscribing && <span className="btn-spinner" />}
-                {subscribing ? 'Processing...' : (changingPlan.monthlyPrice || 0) > 0 ? `Pay ${formatRupees(changingPlan.monthlyPrice)} & Upgrade` : 'Confirm Change'}
+                {subscribing ? 'Processing...' : changingPlan.isMetered ? 'Switch to Pay-as-you-go' : (changingPlan.monthlyPrice || 0) > 0 ? `Pay ${formatRupees(changingPlan.monthlyPrice)} & Upgrade` : 'Confirm Change'}
               </button>
             </div>
           </>

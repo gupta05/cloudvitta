@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { Users, CreditCard, FileText, TrendingUp, Zap, HardDrive } from 'lucide-react';
+import { Users, CreditCard, FileText, TrendingUp, Zap, HardDrive, Gauge } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -11,6 +11,7 @@ import { PRIMARY, PRIMARY_HOVER, GRID_STROKE, AXIS_STROKE, TOOLTIP_STYLE } from 
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
+  const [metered, setMetered] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -21,6 +22,8 @@ export default function Dashboard() {
       .then(setStats)
       .catch((err) => setError(err.message || 'Failed to load dashboard stats'))
       .finally(() => setLoading(false));
+    // Metered revenue is supplementary — its failure never blocks the dashboard.
+    api.getMeteredStats().then(setMetered).catch(() => setMetered(null));
   };
 
   useEffect(() => { fetchStats(); }, []);
@@ -47,11 +50,30 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard icon={TrendingUp} label="Monthly Recurring Revenue" value={formatCurrency(stats?.mrrCents || 0)} accent="primary" />
+        <StatCard icon={TrendingUp} label="Monthly Recurring Revenue" value={formatCurrency(stats?.mrrCents || 0)} subValue={metered ? `+ ${formatCurrency(metered.revenue?.accruedCents || 0)} metered (est.)` : undefined} accent="primary" />
         <StatCard icon={Users} label="Total Customers" value={stats?.totalCustomers || 0} subValue={`${stats?.activeSubscriptions || 0} active subscriptions`} accent="neutral" />
         <StatCard icon={CreditCard} label="Active Subscriptions" value={stats?.activeSubscriptions || 0} subValue={`${stats?.trialSubscriptions || 0} in trial`} accent="success" />
         <StatCard icon={FileText} label="Invoices" value={stats?.totalInvoices || 0} subValue={stats?.overdueInvoices > 0 ? `${stats.overdueInvoices} overdue` : `${stats?.paidInvoices || 0} paid`} accent={stats?.overdueInvoices > 0 ? 'danger' : 'warning'} />
       </div>
+
+      {/* Metered billing summary strip */}
+      {metered && metered.meteredCustomerCount > 0 && (
+        <div className="mb-8 -mt-4">
+          <Link to="/metered" className="glass-card p-4 flex flex-wrap items-center justify-between gap-3 hover:border-cv-primary/50 transition-all duration-200 group">
+            <div className="flex items-center gap-3">
+              <div className="icon-chip"><Gauge size={18} className="text-cv-accent" /></div>
+              <div>
+                <p className="text-sm font-semibold text-cv-text group-hover:text-cv-primary transition-colors">Metered Billing (Pay-as-you-go)</p>
+                <p className="text-xs text-cv-text-muted">
+                  {metered.meteredCustomerCount} customer{metered.meteredCustomerCount === 1 ? '' : 's'} · {formatCurrency(metered.revenue?.accruedCents || 0)} accrued · {formatCurrency(metered.revenue?.outstandingCents || 0)} outstanding
+                  {metered.blockedCustomerCount > 0 && <span className="text-cv-danger"> · {metered.blockedCustomerCount} blocked</span>}
+                </p>
+              </div>
+            </div>
+            <span className="text-xs text-cv-primary font-medium">View details →</span>
+          </Link>
+        </div>
+      )}
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

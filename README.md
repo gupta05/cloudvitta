@@ -9,17 +9,18 @@ A full-stack SaaS billing platform inspired by [Meteroid](https://github.com/met
 | **Multi-Tenancy** | Organizations → Tenants with isolated data, tenant switcher |
 | **Customer Management** | CRUD, search, pagination, customer 360° view |
 | **Product Catalog** | Product families, products, billable metrics (COUNT/SUM/MAX/UNIQUE_COUNT/AVERAGE) |
-| **Plan Builder** | Multi-version plans with price components: flat, per-unit, tiered, package pricing |
+| **Plan Builder** | Multi-version plans with price components: flat, per-unit, tiered, package, metered (₹/GB-month) pricing |
 | **Subscriptions** | Full lifecycle: create → activate → pause → cancel. Plan changes (upgrade/downgrade) |
 | **Billing Engine** | Automated invoice generation from subscriptions, coupon application, addon charges |
+| **Pay-as-you-go Billing** | Usage-Metered plan billed in arrears at ₹200/GB-month on time-weighted average storage (15-min snapshots → GB-hours); billing cycles close automatically; invoices paid via Razorpay "Pay Now"; 1 GB hard cap enforced in real time; overdue invoices block new uploads |
 | **Usage Metering** | Event ingestion API, 5 aggregation types, real-time usage tracking |
 | **Invoices** | Draft → Finalize → Pay → Void lifecycle, line items, credit notes |
 | **Coupons** | Percentage & fixed-amount discounts, redemption limits, expiry dates |
 | **Add-ons** | One-time & recurring add-ons attachable to subscriptions |
 | **API Tokens** | Generate/revoke API keys with HMAC hashing |
 | **Webhooks** | HMAC-signed delivery, event filtering, exponential backoff retries |
-| **Dashboard** | MRR, customer count, subscription status, revenue charts |
-| **Scheduler** | Cron-based background jobs: trial expiration, overdue detection, auto-invoicing |
+| **Dashboard** | MRR, customer count, subscription status, revenue charts, metered billing overview |
+| **Scheduler** | Cron-based background jobs: trial expiration, overdue detection, auto-invoicing, metered cycle close, snapshot retention |
 
 ## 🛠️ Tech Stack
 
@@ -183,9 +184,20 @@ cloudvitta/
 - `/api/addons` — CRUD
 - `/api/events` — Ingest + query + usage aggregation
 - `/api/stats` — MRR, revenue, subscription stats
+- `/api/stats/metered` — Metered customers, estimated revenue, billing cycles, metering health
 - `/api/api-tokens` — Generate/revoke
 - `/api/webhooks` — CRUD
 - `/api/settings/invoicing-entity` — Company info for invoices
+
+## 💰 Storage Plans
+
+| Plan | Price | Storage | Billing |
+|---|---|---|---|
+| **Free** | ₹0/mo | 500 MB hard cap | — |
+| **Pro** | ₹200/mo | 1 GB hard cap | Prepaid via Razorpay checkout |
+| **Usage-Metered** | ₹200 per GB-month | 1 GB hard cap | **Pay-as-you-go, billed in arrears** |
+
+The Usage-Metered plan charges only for what you actually store: storage is snapshotted every 15 minutes and the invoice at the end of each billing cycle bills the **time-weighted average** (e.g. 700 MB average ≈ ₹140, 350 MB ≈ ₹70). Nothing is prepaid — invoices are paid from the portal via Razorpay and fall due in 7 days; an overdue invoice blocks new uploads (existing files stay accessible) until it is paid. The 1 GB storage cap is enforced in real time at upload for **all** plans.
 
 ## License
 

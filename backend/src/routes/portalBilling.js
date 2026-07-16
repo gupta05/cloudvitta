@@ -6,8 +6,15 @@
 import { Router } from 'express';
 import { authenticate, requireUser } from '../middleware/auth.js';
 import { tenantContext, validateTenantAccess } from '../middleware/tenantContext.js';
-import { getStorageUsageSummary } from '../services/storageMeter.js';
-import { computePlanChargeCents } from '../services/paymentService.js';
+import { computePlanChargeCents, addBillingPeriod } from '../services/paymentService.js';
+import { previewCharges } from '../services/billing.js';
+import {
+  openBillingCycle,
+  finalizeMeteredCycleNow,
+  getMeteredEstimate,
+  getMeteredPricing,
+  METERED_NET_TERMS_DAYS,
+} from '../services/billingCycles.js';
 import { recordTransaction, TXN } from '../services/ledger.js';
 
 const router = Router();
@@ -59,13 +66,20 @@ router.get('/plans', async (req, res, next) => {
       let monthlyPrice = 0;
       let storageGB = 0;
       let includedOps = 0;
+      let pricePerGBMonth = null;
+      let hardCapGB = null;
       const features = [];
 
       for (const comp of customerComponents) {
         const pricing = JSON.parse(comp.pricingModel || '{}');
         if (pricing.model === 'flat') monthlyPrice = pricing.price || 0;
+        if (pricing.model === 'metered_gb_month') {
+          pricePerGBMonth = pricing.pricePerGBMonth || 0;
+          if (pricing.hardCapGB) storageGB = pricing.hardCapGB;
+        }
         if (pricing.includedGB) storageGB = pricing.includedGB;
         else if (pricing.hardCapGB && !storageGB) storageGB = pricing.hardCapGB;
+        if (pricing.hardCapGB) hardCapGB = pricing.hardCapGB;
         if (pricing.includedOps) includedOps = pricing.includedOps;
 
         // Build feature list
@@ -77,11 +91,14 @@ router.get('/plans', async (req, res, next) => {
         name: plan.name,
         description: plan.description,
         planType: plan.planType,
+        isMetered: plan.planType === 'METERED',
         versionId: version.id,
         billingPeriod: version.billingPeriod,
         trialDays: version.trialDays,
         currency: version.currency,
         monthlyPrice,
+        pricePerGBMonth,
+        hardCapGB,
         storageGB,
         includedOps,
         features,
@@ -127,13 +144,16 @@ router.post('/subscribe', async (req, res, next) => {
 
     // Paid plans must go through Razorpay checkout — a subscription is only
     // activated after backend payment verification. This endpoint only handles
-    // free plans.
+    // plans with no upfront charge: free plans and METERED plans (which are
+    // billed in arrears at the end of each cycle).
     if (computePlanChargeCents(planVersion) > 0) {
       return res.status(402).json({
         error: 'This plan requires payment. Use the payment checkout flow.',
         requiresPayment: true,
       });
     }
+
+    const isMetered = planVersion.plan.planType === 'METERED';
 
     // Check for existing active subscription
     const existingSub = await prisma.subscription.findFirst({
@@ -142,7 +162,28 @@ router.post('/subscribe', async (req, res, next) => {
         customerId: req.customerId,
         status: { in: ['ACTIVE', 'TRIAL', 'PENDING'] },
       },
+      include: { planVersion: { include: { plan: true, priceComponents: true } } },
     });
+
+    if (existingSub && existingSub.planVersionId === planVersionId) {
+      return res.status(400).json({ error: 'You are already subscribed to this plan' });
+    }
+
+    // An outgoing METERED subscription is billed for its partial cycle BEFORE
+    // it is ended (usage must never be lost on plan changes).
+    if (existingSub?.status === 'ACTIVE' && existingSub.planVersion.plan.planType === 'METERED') {
+      await finalizeMeteredCycleNow(prisma, existingSub, 'Plan changed by customer');
+    }
+
+    const now = new Date();
+    // Metered subs: currentPeriodStart/End is the live billing-cycle pointer,
+    // anchored to the subscribe date (anniversary billing, no proration);
+    // 7-day payment terms keep arrears dunning tight.
+    const meteredFields = isMetered ? {
+      currentPeriodStart: now,
+      currentPeriodEnd: addBillingPeriod(now, planVersion.billingPeriod),
+      netTermsDays: METERED_NET_TERMS_DAYS,
+    } : {};
 
     let subscription;
 
@@ -152,40 +193,26 @@ router.post('/subscribe', async (req, res, next) => {
         where: { id: existingSub.id },
         data: {
           status: 'ENDED',
-          cancelledAt: new Date(),
+          cancelledAt: now,
           cancelReason: 'Plan changed by customer',
         },
       });
-
-      subscription = await prisma.subscription.create({
-        data: {
-          tenantId: req.tenantId,
-          customerId: req.customerId,
-          planVersionId,
-          status: planVersion.trialDays > 0 ? 'TRIAL' : 'ACTIVE',
-          billingStartDate: new Date(),
-          billingDay: new Date().getDate(),
-          trialStartDate: planVersion.trialDays > 0 ? new Date() : null,
-          trialEndDate: planVersion.trialDays > 0
-            ? new Date(Date.now() + planVersion.trialDays * 86400000) : null,
-        },
-      });
-    } else {
-      // New subscription
-      subscription = await prisma.subscription.create({
-        data: {
-          tenantId: req.tenantId,
-          customerId: req.customerId,
-          planVersionId,
-          status: planVersion.trialDays > 0 ? 'TRIAL' : 'ACTIVE',
-          billingStartDate: new Date(),
-          billingDay: new Date().getDate(),
-          trialStartDate: planVersion.trialDays > 0 ? new Date() : null,
-          trialEndDate: planVersion.trialDays > 0
-            ? new Date(Date.now() + planVersion.trialDays * 86400000) : null,
-        },
-      });
     }
+
+    subscription = await prisma.subscription.create({
+      data: {
+        tenantId: req.tenantId,
+        customerId: req.customerId,
+        planVersionId,
+        status: planVersion.trialDays > 0 ? 'TRIAL' : 'ACTIVE',
+        billingStartDate: now,
+        billingDay: now.getDate(),
+        trialStartDate: planVersion.trialDays > 0 ? now : null,
+        trialEndDate: planVersion.trialDays > 0
+          ? new Date(Date.now() + planVersion.trialDays * 86400000) : null,
+        ...meteredFields,
+      },
+    });
 
     // Create subscription components
     if (planVersion.priceComponents.length > 0) {
@@ -197,13 +224,20 @@ router.post('/subscribe', async (req, res, next) => {
       });
     }
 
+    // Metered subs get an OPEN billing cycle for their first period.
+    if (isMetered) {
+      await openBillingCycle(prisma, subscription);
+    }
+
     // Create notification
     prisma.notification.create({
       data: {
         userId: req.user.userId,
         type: 'billing',
         title: existingSub ? 'Plan changed' : 'Subscription activated',
-        message: `You are now subscribed to the ${planVersion.plan.name} plan.`,
+        message: isMetered
+          ? `You are now on the ${planVersion.plan.name} plan. You'll be billed at the end of each cycle based on your measured storage usage (₹${getMeteredPricing(planVersion)?.pricePerGBMonth ?? 200}/GB-month, 1 GB max).`
+          : `You are now subscribed to the ${planVersion.plan.name} plan.`,
       },
     }).catch(() => {});
 
@@ -245,11 +279,17 @@ router.post('/cancel', async (req, res, next) => {
         customerId: req.customerId,
         status: { in: ['ACTIVE', 'TRIAL'] },
       },
-      include: { planVersion: { include: { plan: true } } },
+      include: { planVersion: { include: { plan: true, priceComponents: true } } },
     });
 
     if (!subscription) {
       return res.status(404).json({ error: 'No active subscription found' });
+    }
+
+    // A metered subscription is billed for its partial cycle before cancelling
+    // (must happen while the sub is still ACTIVE — the engine rejects others).
+    if (subscription.status === 'ACTIVE' && subscription.planVersion.plan.planType === 'METERED') {
+      await finalizeMeteredCycleNow(prisma, subscription, 'Cancelled by customer');
     }
 
     await prisma.subscription.update({
@@ -393,7 +433,9 @@ router.put('/payment-methods/:id/default', async (req, res, next) => {
 
 // ─── Current Charges ────────────────────────────────────────
 
-// GET /api/portal/billing/charges — current period cost breakdown
+// GET /api/portal/billing/charges — current period cost breakdown.
+// Uses the same calculation path as invoice generation (previewCharges), so
+// the live estimate always matches what the invoice will say.
 router.get('/charges', async (req, res, next) => {
   try {
     const prisma = req.app.locals.prisma;
@@ -403,14 +445,7 @@ router.get('/charges', async (req, res, next) => {
     const subscription = await prisma.subscription.findFirst({
       where: { tenantId, customerId, status: { in: ['ACTIVE', 'TRIAL'] } },
       include: {
-        planVersion: {
-          include: {
-            plan: true,
-            priceComponents: {
-              include: { billableMetric: true },
-            },
-          },
-        },
+        planVersion: { include: { plan: true } },
       },
     });
 
@@ -418,57 +453,112 @@ router.get('/charges', async (req, res, next) => {
       return res.json({ charges: [], total: 0, subscription: null });
     }
 
-    // Get usage
-    const periodStart = subscription.billingStartDate;
+    // Metered subs estimate over the live billing cycle; prepaid subs over the
+    // subscription's own billing window (billingStartDate → now, as before).
+    const isMetered = subscription.planVersion.plan.planType === 'METERED';
+    const periodStart = (isMetered && subscription.currentPeriodStart) || subscription.billingStartDate;
     const periodEnd = new Date();
-    const usage = await getStorageUsageSummary(prisma, tenantId, customerId, periodStart, periodEnd);
 
-    // Calculate charges per component. Bandwidth (egress/ingress) is internal-only and
-    // never billed to customers, so it is excluded from the charge breakdown.
-    const bandwidthCodes = ['storage_egress_bytes', 'storage_ingress_bytes'];
-    const charges = [];
-    let total = 0;
+    const preview = await previewCharges(prisma, subscription.id, tenantId, periodStart, periodEnd);
 
-    for (const comp of subscription.planVersion.priceComponents) {
-      if (bandwidthCodes.includes(comp.billableMetric?.code)) continue;
-
-      const pricing = JSON.parse(comp.pricingModel || '{}');
-      let amount = 0;
-      let description = comp.name;
-
-      if (pricing.model === 'flat') {
-        amount = pricing.price || 0;
-        description = `${comp.name} — Base fee`;
-      } else if (pricing.model === 'per_unit') {
-        // Match the invoice engine: bill the time-weighted average GB above the included quota.
-        const usedGB = usage?.storage?.avgGB || 0;
-        const includedGB = pricing.includedGB || 0;
-        const unitPrice = pricing.unitPrice || 0;
-        const overageGB = Math.max(0, usedGB - includedGB);
-        amount = overageGB * unitPrice;
-        description = `${comp.name} — ${overageGB.toFixed(2)} GB overage @ ₹${unitPrice}/GB`;
-      } else if (pricing.model === 'tiered') {
-        // Simplified tiered calculation
-        amount = 0;
-        description = `${comp.name} — Usage-based`;
-      }
-
-      charges.push({
-        component: comp.name,
-        description,
-        amount: Math.round(amount * 100) / 100,
-        metric: comp.billableMetric?.name || null,
-      });
-      total += amount;
-    }
+    // Response stays in rupees (2-dp floats) for backward compatibility with
+    // the portal UI (formatRupees).
+    const charges = preview.lines.map((line) => ({
+      component: line.name,
+      description: line.description,
+      amount: Math.round(line.totalCents) / 100,
+      metric: (() => { try { return JSON.parse(line.metadata || '{}').metricCode || null; } catch { return null; } })(),
+    }));
 
     res.json({
       charges,
-      total: Math.round(total * 100) / 100,
+      total: Math.round(preview.totalCents) / 100,
       currency: subscription.planVersion.currency,
-      periodStart: subscription.billingStartDate,
-      periodEnd: new Date(),
+      periodStart,
+      periodEnd,
       planName: subscription.planVersion.plan.name,
+      isMetered,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─── Metered Usage & Estimate ───────────────────────────────
+
+// GET /api/portal/billing/metered — live metered-billing view: current cycle,
+// accrued/projected bill, daily usage series, recent closed cycles, and the
+// pricing formula. 404 when the customer is not on a metered plan.
+router.get('/metered', async (req, res, next) => {
+  try {
+    const prisma = req.app.locals.prisma;
+    const { tenantId, customerId } = req;
+
+    const subscription = await prisma.subscription.findFirst({
+      where: { tenantId, customerId, status: 'ACTIVE' },
+      include: {
+        planVersion: { include: { plan: true, priceComponents: { include: { billableMetric: true } } } },
+      },
+    });
+
+    if (!subscription || subscription.planVersion.plan.planType !== 'METERED') {
+      return res.status(404).json({ error: 'No active metered subscription' });
+    }
+
+    const estimate = await getMeteredEstimate(prisma, subscription);
+    if (!estimate) {
+      return res.status(404).json({ error: 'Metered subscription has no billing period configured' });
+    }
+
+    // Daily usage series for the current cycle: aggregate snapshots (bucketId
+    // null) downsampled to one point per day (last snapshot of each day).
+    const snapshots = await prisma.storageSnapshot.findMany({
+      where: {
+        tenantId, customerId, bucketId: null,
+        snapshotTime: { gte: new Date(estimate.periodStart), lte: new Date() },
+      },
+      orderBy: { snapshotTime: 'asc' },
+      select: { usedBytes: true, snapshotTime: true },
+    });
+    const byDay = new Map();
+    for (const s of snapshots) {
+      byDay.set(s.snapshotTime.toISOString().slice(0, 10), s); // last one per day wins
+    }
+    const dailyUsage = [...byDay.entries()].map(([day, s]) => ({
+      day,
+      usedGB: Math.round(Number(s.usedBytes) / (1024 ** 3) * 10000) / 10000,
+    }));
+
+    // Recent closed cycles with their invoices
+    const cycles = await prisma.billingCycle.findMany({
+      where: { tenantId, customerId, status: 'INVOICED' },
+      orderBy: { periodStart: 'desc' },
+      take: 6,
+      include: { invoice: { select: { id: true, invoiceNumber: true, status: true, totalCents: true, amountDueCents: true, dueDate: true } } },
+    });
+
+    // Overdue block state (mirrors the upload guard)
+    const overdueInvoice = await prisma.invoice.findFirst({
+      where: { tenantId, customerId, status: 'OVERDUE', amountDueCents: { gt: 0 } },
+      select: { id: true, invoiceNumber: true, amountDueCents: true, dueDate: true },
+      orderBy: { dueDate: 'asc' },
+    });
+
+    res.json({
+      planName: subscription.planVersion.plan.name,
+      estimate,
+      dailyUsage,
+      cycles: cycles.map((c) => ({
+        id: c.id,
+        periodStart: c.periodStart,
+        periodEnd: c.periodEnd,
+        avgGB: c.avgGB,
+        gbHours: c.gbHours,
+        peakGB: c.peakGB,
+        amountCents: c.amountCents,
+        invoice: c.invoice,
+      })),
+      uploadsBlocked: Boolean(overdueInvoice),
+      overdueInvoice,
+      formula: `Time-weighted average storage (GB-hours ÷ period hours) × ₹${estimate.pricePerGBMonth}/GB-month, capped at ${estimate.hardCapGB} GB`,
     });
   } catch (err) { next(err); }
 });

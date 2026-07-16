@@ -9,6 +9,7 @@ import { Router } from 'express';
 import { authenticate, requireUser } from '../middleware/auth.js';
 import { tenantContext, validateTenantAccess } from '../middleware/tenantContext.js';
 import { getStorageUsageSummary } from '../services/storageMeter.js';
+import { getMeteredEstimate } from '../services/billingCycles.js';
 import crypto from 'crypto';
 
 const router = Router();
@@ -88,8 +89,14 @@ router.get('/dashboard', async (req, res, next) => {
       }
     }
 
-    // Estimated cost (simple: base plan fee)
-    const estimatedCostCents = monthlyPriceCents;
+    // Estimated cost: prepaid plans = the flat base fee; metered plans = the
+    // charge accrued so far this cycle (time-weighted average usage × rate).
+    let estimatedCostCents = monthlyPriceCents;
+    const isMetered = subscription?.planVersion.plan.planType === 'METERED';
+    if (isMetered) {
+      const estimate = await getMeteredEstimate(prisma, subscription).catch(() => null);
+      if (estimate) estimatedCostCents = estimate.accruedCents;
+    }
 
     res.json({
       storage: {
@@ -110,9 +117,12 @@ router.get('/dashboard', async (req, res, next) => {
         status: subscription.status,
         planName: subscription.planVersion.plan.name,
         planType: subscription.planVersion.plan.planType,
+        isMetered,
         billingPeriod: subscription.planVersion.billingPeriod,
         trialEndDate: subscription.trialEndDate,
         billingStartDate: subscription.billingStartDate,
+        currentPeriodStart: subscription.currentPeriodStart,
+        currentPeriodEnd: subscription.currentPeriodEnd,
         coupon: subscription.coupon,
       } : null,
       requests24h: recentEvents,
