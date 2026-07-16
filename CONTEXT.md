@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for understanding this project across development sessions. Whenever a significant change lands — new feature, architectural change, integration, refactor, schema modification, infra/deployment change, security improvement, pricing update, auth change — **update the relevant sections of this file in the same piece of work**. It must always describe the *current* implementation, never an aspirational or outdated one.
 >
-> Last synchronized: 2026-07-16 (app-wide UI/UX consistency pass: shared UI component library (`components/ui/` — Modal/ConfirmDialog/StatCard/TabPills/Pagination/skeletons/OtpInput), shared `lib/` formatters (en-IN dates, bytes, chart theme, UI maps), mobile drawer in both layout shells, accessibility sweep, `DESIGN.md` rewritten; frontend-only change, no API/schema/auth changes).
+> Last synchronized: 2026-07-16 (production admin provisioning: removed all seeded demo users/customers/subscriptions/usage; `prisma/seed.js` now provisions a single administrator from `ADMIN_EMAIL`/`ADMIN_PASSWORD` env vars (bcrypt-12, idempotent, no duplicates) and seeds only the product catalog + plans; README/.env.example updated; no schema/API changes).
 
 ---
 
@@ -26,7 +26,7 @@ zoho project/
 ├── package.json            # workspaces: ["backend", "frontend"]; scripts: dev, dev:backend, dev:frontend, db:push, db:seed, db:studio, setup
 ├── .gitignore              # comprehensive: node_modules, .env*, *.db, dist, logs, IDE/OS files (keeps .env.example + .vscode/settings.json)
 ├── .env.example            # aggregate env reference (points to per-service templates)
-├── README.md               # feature matrix, setup (env step + npm run setup), demo creds
+├── README.md               # feature matrix, setup (env step + npm run setup), admin provisioning
 ├── implementation_plan.md  # historical work plan (forgot-password, pricing consistency, toast fixes — all implemented)
 ├── DESIGN.md               # design-system reference (living document — keep in sync with UI changes)
 ├── CONTEXT.md              # ← this file
@@ -40,7 +40,7 @@ zoho project/
 │   │   └── utils/errors.js # ApiError + global error handler
 │   ├── prisma/
 │   │   ├── schema.prisma   # 26 models, SQLite
-│   │   ├── seed.js         # demo data (Free 500 MB / Pro 1 GB ₹200/mo)
+│   │   ├── seed.js         # production baseline: env-driven admin + catalog/plans (no demo users)
 │   │   └── dev.db          # SQLite database (gitignored)
 │   └── .env                # local secrets (gitignored)
 └── frontend/
@@ -197,7 +197,7 @@ Key facts: string pseudo-enums (SQLite), JSON as String columns, BigInt for byte
 | Storage/Metering | `StorageBucket` (denormalized usedBytes/objectCount, quotaBytes, unused isPublic), `StorageObject` (unique [bucketId, key], soft-delete, sha256), `StorageSnapshot` (GB-hour source), `UsageEvent` (indexed [tenantId, customerId, eventCode, timestamp]) |
 | Misc | `ApiToken` (SHA-256 hash + prefix), `WebhookEndpoint` (secret + events JSON), `Notification`, `NotificationPreference` (13 toggles), `UserPreference` |
 
-Workflow: **`prisma db push`** (no migrations). Seed (`prisma/seed.js`) is **non-destructive for user accounts** — wipes only catalog/billing/storage-metadata data (incl. payments/transactions/webhook events), upserts tenants/customers (forcing `currency: 'INR'` on existing rows). Acme's seeded Pro sub gets `currentPeriodStart/End` so the expiry cron doesn't downgrade the demo account.
+Workflow: **`prisma db push`** (no migrations). Seed (`prisma/seed.js`) provisions a **production baseline**: it reads `ADMIN_EMAIL`/`ADMIN_PASSWORD` from `backend/.env`, upserts a **single administrator** (`role: 'admin'`, bcrypt-12 hashed password, verified — idempotent, never duplicates, never overwrites an existing admin's password), and seeds only the product catalog (Object Storage family + metrics), the Free/Pro plans, add-ons, coupons, and the invoicing entity. It **creates no demo customers, subscriptions, invoices, usage events, or end-user accounts**, and purges any legacy demo accounts (`admin@`/`member@cloudvitta.dev`, `user@acme.com`, `user@techstart.io`, and the `acme`/`techstart`/`dataflow` customers) from older dev databases. Real end-user accounts created via public signup are preserved; their catalog/billing/storage rows are reset. The seed **exits with an error** if `ADMIN_EMAIL`/`ADMIN_PASSWORD` are missing or invalid.
 
 ## 13. API Architecture
 
@@ -265,7 +265,8 @@ Backend `.env` (template: `backend/.env.example`; a root `.env.example` aggregat
 |---|---|
 | `PORT` | API port (default 3000) |
 | `DATABASE_URL` | `file:./dev.db` |
-| `JWT_SECRET` / `JWT_EXPIRY` | JWT signing (hardcoded dev fallback exists) / lifetime (7d) |
+| `JWT_SECRET` / `JWT_EXPIRY` | JWT signing (**required — no fallback**; server returns 500 if unset) / lifetime (7d) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial administrator provisioned by `npm run db:seed` (bcrypt-12 hashed; required by the seed; min 8-char password) |
 | `OCI_S3_ENDPOINT` / `OCI_S3_BUCKET` / `OCI_S3_REGION` / `OCI_S3_ACCESS_KEY_ID` / `OCI_S3_SECRET_ACCESS_KEY` | OCI object storage (S3-compat) |
 | `GLOBAL_STORAGE_CAP_GB` | Platform-wide storage cap (15) |
 | `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Transactional email |
@@ -292,13 +293,11 @@ Backend `.env` (template: `backend/.env.example`; a root `.env.example` aggregat
 npm run setup          # install + db:push + db:seed
 npm run dev            # backend (:3000, node --watch) + frontend (:5173) together
 npm run db:push        # apply schema changes (no migrations)
-npm run db:seed        # re-seed (preserves real user accounts; resets catalog/billing/storage-metadata)
+npm run db:seed        # provision the admin (from env) + catalog/plans; preserves real signup accounts
 npm run db:studio      # Prisma Studio
 ```
 
-**Demo credentials** (password `password123` for all):
-- Admin: `admin@cloudvitta.dev` · Member: `member@cloudvitta.dev`
-- Portal: `user@acme.com` (Acme — Pro ₹200/mo), `user@techstart.io` (TechStart — Free)
+**Administrator account (no demo logins):** `npm run db:seed` reads `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `backend/.env` and provisions a single `role: 'admin'` user (bcrypt-12 hashed password, verified). It is idempotent — re-running never creates a duplicate and never overwrites an existing admin's password. Sign in at `/login`, then change the password after first login. All other accounts come from the public signup flow, which only ever creates `user`-role customer accounts.
 
 ## 23. Important Design Decisions & Trade-offs
 
@@ -309,7 +308,7 @@ npm run db:studio      # Prisma Studio
 5. **Synchronous in-request metering + 15-min snapshots** — simplicity over ingestion pipeline; JS-side aggregation acceptable at SQLite scale.
 6. **Schema-push instead of migrations** — fast dev iteration; no migration history (would need to change for production).
 7. **Tenant scoping by convention** (manual `tenantId` in every where) — no global enforcement layer.
-8. **Non-destructive seed** — re-runnable demo reset that never deletes real user accounts.
+8. **Idempotent env-driven admin seed** — re-runnable baseline that provisions the admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD` without duplicating it or deleting real signup accounts.
 9. **Bandwidth is metered but never billed** — egress/ingress tracked for infra awareness only (admin sees est. infra cost @ ₹7.5/GB).
 10. **DB records are the financial source of truth** — Payments/Transactions/Invoices drive all billing UI and reporting; gateway responses are persisted (`Payment.gatewayResponse`, `PaymentWebhookEvent.payload`) but never rendered live.
 11. **Claim-guard idempotency over locks** — payment capture uses an atomic status-guarded `updateMany` (CAS) instead of interactive transactions, avoiding SQLite lock contention between the verify endpoint and the webhook; webhook event-id dedup and ledger idempotency keys are the second and third layers.

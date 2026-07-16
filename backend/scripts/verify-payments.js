@@ -4,7 +4,11 @@
  * Usage (backend server must be running — `npm run dev:backend` in another terminal):
  *   node backend/scripts/verify-payments.js            # safe, non-mutating checks
  *   node backend/scripts/verify-payments.js --expiry   # also tests paid-period expiry
- *                                                      # (downgrades demo Acme sub — restore with `npm run db:seed`)
+ *                                                      # (downgrades an active paid sub — restore with `npm run db:seed`)
+ *
+ * The portal-authenticated checks (sections 4-8) need a normal end-user account.
+ * Provide one via env vars, otherwise those checks are skipped:
+ *   TEST_USER_EMAIL / TEST_USER_PASSWORD   (a portal/customer account you created)
  */
 
 import path from 'path';
@@ -69,18 +73,26 @@ async function main() {
   }
 
   console.log('── 4. Auth + plan discovery ───────────────────────────');
+  const testEmail = process.env.TEST_USER_EMAIL;
+  const testPassword = process.env.TEST_USER_PASSWORD;
+  if (!testEmail || !testPassword) {
+    console.log('  SKIP  Portal-authenticated checks (sections 4-8) — set TEST_USER_EMAIL / TEST_USER_PASSWORD');
+    console.log('        to a normal end-user account (create one via public signup) to run them.');
+    console.log(`\nResult: ${passed} passed, ${failed} failed (portal checks skipped)`);
+    return;
+  }
   const loginRes = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'user@techstart.io', password: 'password123' }),
+    body: JSON.stringify({ email: testEmail, password: testPassword }),
   });
   if (!loginRes.ok) {
-    fail('Login as user@techstart.io', `status ${loginRes.status}`);
+    fail(`Login as ${testEmail}`, `status ${loginRes.status}`);
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     return;
   }
   const { token } = await loginRes.json();
-  ok('Login as user@techstart.io (Free plan demo user)');
+  ok(`Login as ${testEmail} (test end-user)`);
   const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   const plansRes = await fetch(`${BASE}/portal/billing/plans`, { headers: auth });
@@ -171,7 +183,7 @@ async function main() {
   else fail('GET transaction ledger', `status ${txnHist.status}`);
 
   if (process.argv.includes('--expiry')) {
-    console.log('── 9. Paid-period expiry downgrade (MUTATES demo data) ─');
+    console.log('── 9. Paid-period expiry downgrade (MUTATES data) ─────');
     const sub = await prisma.subscription.findFirst({
       where: { status: 'ACTIVE', currentPeriodEnd: { not: null } },
       include: { customer: true, planVersion: { include: { plan: true } } },
@@ -198,7 +210,7 @@ async function main() {
       } else {
         fail('Expiry downgrade', `downgraded=${result.downgraded} ledger=${Boolean(ledgerRow)} newPlan=${newSub?.planVersion.plan.name}`);
       }
-      console.log('  NOTE  Demo subscription was downgraded — run `npm run db:seed` to restore.');
+      console.log('  NOTE  A subscription was downgraded — run `npm run db:seed` to restore the baseline.');
     }
   }
 

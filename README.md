@@ -51,14 +51,18 @@ cp backend/.env.example backend/.env
 cp .env.example .env            # optional aggregate reference
 # frontend/.env is optional (see frontend/.env.example)
 
-# 2. Install deps (both workspaces), push the schema, and seed demo data
+# 2. Set the initial administrator credentials in backend/.env
+#    ADMIN_EMAIL=admin@yourcompany.com
+#    ADMIN_PASSWORD=<a-strong-password>      # min 8 chars; change after first login
+
+# 3. Install deps (both workspaces), push the schema, and seed the baseline
 npm run setup                   # = npm install && npm run db:push && npm run db:seed
 ```
 
-> **Minimum to boot:** set a `JWT_SECRET` in `backend/.env` (required). The
-> OCI, Brevo, and Razorpay values are only needed for storage uploads, OTP
-> emails, and payments respectively — the app starts without them but those
-> features will be inert.
+> **Minimum to boot:** set a `JWT_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`
+> in `backend/.env` (all required by `npm run db:seed`). The OCI, Brevo, and
+> Razorpay values are only needed for storage uploads, OTP emails, and payments
+> respectively — the app starts without them but those features will be inert.
 
 ### Required environment variables
 
@@ -68,6 +72,7 @@ Full documentation lives in `backend/.env.example`. Summary:
 |---|---|---|
 | `JWT_SECRET` | ✅ | JWT signing secret (server 500s if unset) |
 | `DATABASE_URL` | ✅ | SQLite connection string (`file:./dev.db`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | ✅ (seed) | Initial administrator account provisioned by `npm run db:seed` |
 | `OCI_S3_ENDPOINT` / `_BUCKET` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_REGION` | for storage | Oracle Cloud Object Storage (S3-compatible) |
 | `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | for OTP email | Transactional email delivery |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` | for payments | Razorpay (Test Mode) |
@@ -82,16 +87,21 @@ npm run dev
 
 Open **http://localhost:5173** in your browser.
 
-### Demo Credentials
+### Administrator account
 
-Seeded by `npm run db:seed`. Password is `password123` for all accounts.
+There are **no demo/seed logins**. `npm run db:seed` provisions a single
+administrator from `ADMIN_EMAIL` / `ADMIN_PASSWORD` in `backend/.env`:
 
-| Email | Role | Notes |
-|---|---|---|
-| `admin@cloudvitta.dev` | Admin | Full admin app |
-| `member@cloudvitta.dev` | Member | Admin app (no hard delete) |
-| `user@acme.com` | Portal user | Acme Corp — Pro plan (₹200/mo) |
-| `user@techstart.io` | Portal user | TechStart — Free plan |
+- The password is hashed with bcrypt (12 rounds) — it is never stored in
+  plaintext and never committed to the repo.
+- Seeding is **idempotent**: re-running never creates a duplicate admin and
+  never overwrites an existing admin's password.
+- Sign in at `/login` with those credentials, then change the password from
+  the account settings after first login.
+
+Everyone else signs up through the public **Create Account** flow, which only
+ever creates normal customer (`user`) accounts — the public API can never
+create an administrator.
 
 ## 📁 Project Structure
 
