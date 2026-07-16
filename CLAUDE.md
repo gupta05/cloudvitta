@@ -17,7 +17,7 @@ Whenever you implement a **significant change**, update the affected sections of
 Keep CONTEXT.md factual and current-state — replace superseded facts, don't append history.
 
 ## Project quick facts
-- npm-workspaces monorepo: `backend/` (Express 5 + Prisma/SQLite, ESM) + `frontend/` (React 18 + Vite + Tailwind v4).
+- npm-workspaces monorepo: `backend/` (Express 5 + Prisma/PostgreSQL, ESM) + `frontend/` (React 18 + Vite + Tailwind v4).
 - **Currency is INR (₹)**. Money is integer paise in `*Cents`-named fields; plan pricing JSON uses whole-rupee floats. Frontend formatting goes through `frontend/src/lib/currency.js` (`formatCurrency` for paise, `formatRupees` for whole rupees) — never hardcode `$` or re-add inline formatters.
 - DB workflow: `npm run db:push` (no migrations) + `npm run db:seed` (non-destructive for user accounts).
 - Dev: `npm run dev` (backend :3000, frontend :5173 with /api proxy). Admin account is provisioned by `npm run db:seed` from `ADMIN_EMAIL`/`ADMIN_PASSWORD` (see CONTEXT.md §22); no demo logins exist.

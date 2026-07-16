@@ -1,14 +1,15 @@
 // CloudVitta Database Schema
 // Modeled after Meteroid's domain — ~20 core tables
-// Using SQLite via Prisma
+// Using PostgreSQL via Prisma (Neon in production)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled connection (runtime queries)
+  directUrl = env("DIRECT_URL")   // direct connection (prisma db push / migrations)
 }
 
 // ─── Multi-Tenancy ───────────────────────────────────────
@@ -166,7 +167,7 @@ model PriceComponent {
   planVersionId    String
   name             String
   feeType          String // RATE, SLOT, CAPACITY, USAGE, ONETIME, RECURRING
-  // JSON-encoded pricing model. For SQLite (no JSONB), we store as text.
+  // JSON-encoded pricing model, stored as text (app does its own parse/stringify).
   // Supports: flat, per_unit, tiered, package, usage_based
   // Example: {"model":"tiered","tiers":[{"upTo":100,"unitPrice":0.10},{"upTo":null,"unitPrice":0.05}]}
   pricingModel     String @default("{}")

@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for understanding this project across development sessions. Whenever a significant change lands — new feature, architectural change, integration, refactor, schema modification, infra/deployment change, security improvement, pricing update, auth change — **update the relevant sections of this file in the same piece of work**. It must always describe the *current* implementation, never an aspirational or outdated one.
 >
-> Last synchronized: 2026-07-16 (production admin provisioning: removed all seeded demo users/customers/subscriptions/usage; `prisma/seed.js` now provisions a single administrator from `ADMIN_EMAIL`/`ADMIN_PASSWORD` env vars (bcrypt-12, idempotent, no duplicates) and seeds only the product catalog + plans; README/.env.example updated; no schema/API changes).
+> Last synchronized: 2026-07-16 (deploy-readiness: DB switched SQLite→PostgreSQL (`schema.prisma` provider + `directUrl`; clean port — UUID PKs, JSON-as-String, BigInt, no SQLite-only constructs); env-driven CORS via `FRONTEND_URL`; frontend API base via `VITE_API_URL` (origin + `/api`, dev proxy fallback); Netlify `_redirects` SPA fallback; env templates + §3/§4/§9/§12/§19/§21/§25/§26 updated. Target stack: Netlify + Render + Neon, all free-tier).
 
 ---
 
@@ -39,9 +39,9 @@ zoho project/
 │   │   ├── middleware/     # auth.js, tenantContext.js
 │   │   └── utils/errors.js # ApiError + global error handler
 │   ├── prisma/
-│   │   ├── schema.prisma   # 26 models, SQLite
+│   │   ├── schema.prisma   # 29 models, PostgreSQL
 │   │   ├── seed.js         # production baseline: env-driven admin + catalog/plans (no demo users)
-│   │   └── dev.db          # SQLite database (gitignored)
+│   │   └── dev.db          # legacy local SQLite file (gitignored; unused after Postgres switch)
 │   └── .env                # local secrets (gitignored)
 └── frontend/
     ├── .env.example       # frontend env template (VITE_API_URL — optional/unused)
@@ -64,7 +64,7 @@ zoho project/
 
 | Layer | Technology |
 |---|---|
-| Backend | Node.js (ESM), **Express 5**, Prisma 6 ORM, **SQLite** (`file:./dev.db`, schema-push workflow — no migrations dir) |
+| Backend | Node.js (ESM), **Express 5**, Prisma 6 ORM, **PostgreSQL** (Neon in production; schema-push workflow — no migrations dir) |
 | Auth | `jsonwebtoken` (Bearer JWT), `bcryptjs`, custom OTP service |
 | Payments | **`razorpay` SDK v2 (Test Mode)** — orders API via SDK, signature/webhook verification via `node:crypto` HMAC |
 | Storage | `@aws-sdk/client-s3` v3 pointed at **OCI S3-compatible endpoint** (region default `ap-mumbai-1`), `multer` for uploads |
@@ -80,12 +80,12 @@ Browser (React SPA :5173)
    │  /api proxy (Vite dev) — Bearer JWT + x-tenant-id header
    ▼
 Express API (:3000, backend/src/server.js)
-   ├── middleware: helmet (security headers) → cors (localhost:5173 only) → request logger → express.json(10mb) → per-router auth chains
+   ├── middleware: helmet (security headers) → cors (env-driven allowlist: localhost dev + `FRONTEND_URL`) → request logger → express.json(10mb) → per-router auth chains
    ├── routes/* (25 routers, /api/... prefixes)
    ├── services/* (billing engine, storage, metering, lifecycle, OTP, email)
    ├── node-cron scheduler (snapshots, trials, invoicing, overdue, cleanup)
    ▼                                    ▼
-Prisma → SQLite (dev.db)      AWS S3 SDK → OCI Object Storage (1 physical bucket)
+Prisma → PostgreSQL (Neon)    AWS S3 SDK → OCI Object Storage (1 physical bucket)
                               Brevo API → transactional OTP emails
 ```
 
@@ -142,7 +142,7 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 **Metering:**
 - `UsageEvent` rows written **synchronously in-request** by storage operations (put/get/delete/ingress/egress), plus arbitrary batch ingestion via `POST /api/events/ingest`.
 - `StorageSnapshot` rows written by cron **every 15 min** (per customer aggregate with `bucketId: null` + per bucket) — used for time-weighted **GB-hour** storage averaging.
-- `BillableMetric` aggregation types: COUNT, SUM, MAX, UNIQUE_COUNT, AVERAGE — computed **in JavaScript** over full event fetches (`services/metering.js`; fine for SQLite scale, a known scaling limit).
+- `BillableMetric` aggregation types: COUNT, SUM, MAX, UNIQUE_COUNT, AVERAGE — computed **in JavaScript** over full event fetches (`services/metering.js`; a known scaling limit at high event volume).
 - Seeded metric codes: `storage_bytes_stored` (MAX), `storage_put_ops`/`storage_get_ops`/`storage_delete_ops` (COUNT), `storage_egress_bytes`/`storage_ingress_bytes` (SUM). **Bandwidth (egress/ingress) is internal-only — always excluded from invoices, portal plans, and charges** (surfaced only in admin storage stats).
 
 **Billing engine** (`backend/src/services/billing.js` — `generateInvoiceForSubscription`):
@@ -184,9 +184,9 @@ Hierarchy: **Organization → Tenant(s) → Customers/Plans/Invoices/…** Every
 
 `PaymentMethod` rows remain display-only card records (portal form); real charges go through Razorpay checkout. Local dev: the verify endpoint carries the happy path without any tunnel; webhook-only events (refunds) require exposing `/api/payments/webhook/razorpay` via a tunnel (e.g. ngrok) and configuring it in the Razorpay dashboard with events `payment.captured`, `payment.failed`, `refund.processed`.
 
-## 12. Database Schema (Prisma, SQLite — 29 models)
+## 12. Database Schema (Prisma, PostgreSQL — 29 models)
 
-Key facts: string pseudo-enums (SQLite), JSON as String columns, BigInt for bytes, money as integer paise.
+Key facts: string pseudo-enums (portable from the original SQLite design), JSON stored as String columns (app parses), BigInt for bytes, money as integer paise.
 
 | Group | Models |
 |---|---|
@@ -264,7 +264,9 @@ Backend `.env` (template: `backend/.env.example`; a root `.env.example` aggregat
 | Var | Purpose |
 |---|---|
 | `PORT` | API port (default 3000) |
-| `DATABASE_URL` | `file:./dev.db` |
+| `DATABASE_URL` | PostgreSQL pooled connection (Neon `…-pooler…`, `sslmode=require`) — runtime queries |
+| `DIRECT_URL` | PostgreSQL direct connection (Neon, no `-pooler`) — `prisma db push` only |
+| `FRONTEND_URL` | Comma-separated allowed CORS origins for the deployed frontend (localhost dev origins always allowed) |
 | `JWT_SECRET` / `JWT_EXPIRY` | JWT signing (**required — no fallback**; server returns 500 if unset) / lifetime (7d) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Initial administrator provisioned by `npm run db:seed` (bcrypt-12 hashed; required by the seed; min 8-char password) |
 | `OCI_S3_ENDPOINT` / `OCI_S3_BUCKET` / `OCI_S3_REGION` / `OCI_S3_ACCESS_KEY_ID` / `OCI_S3_SECRET_ACCESS_KEY` | OCI object storage (S3-compat) |
@@ -273,7 +275,7 @@ Backend `.env` (template: `backend/.env.example`; a root `.env.example` aggregat
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Razorpay API keys (Test Mode `rzp_test_…`; live migration = swap values only). key_id is sent to the browser via the create-order response |
 | `RAZORPAY_WEBHOOK_SECRET` | HMAC secret for `/api/payments/webhook/razorpay` (set when configuring the webhook in the Razorpay dashboard; events: payment.captured, payment.failed, refund.processed) |
 | `RENEWAL_GRACE_DAYS` | Days after `currentPeriodEnd` before a lapsed paid sub is downgraded to Free (default 3) |
-| `VITE_API_URL` | Documented but **unused** — frontend hardcodes `/api` + Vite proxy |
+| `VITE_API_URL` | Backend origin for the deployed frontend (e.g. `https://api.cloudvitta.in`); client appends `/api`. Unset in dev → falls back to the Vite proxy `/api` |
 
 ## 20. Third-Party Services & SDKs
 
@@ -285,7 +287,17 @@ Backend `.env` (template: `backend/.env.example`; a root `.env.example` aggregat
 
 ## 21. Deployment & Infrastructure
 
-**None exists.** No Dockerfile, docker-compose, CI (.github/), or platform configs. Dev-only workflow: local Node processes + SQLite file + Vite dev server with proxy. Deploying would require at minimum: real DB (SQLite → Postgres implies schema/JSON/enum changes), serving the built frontend, HTTPS/CORS config, secret management, and process supervision.
+**Target (all free-tier):** static React build on **Netlify** (`cloudvitta.in`), Express API on **Render** free web service (`api.cloudvitta.in`), database on **Neon** managed Postgres, plus a **cron-job.org** keep-alive pinging `/api/health` every ~10 min to prevent Render cold-starts and keep node-cron jobs alive. External services (OCI Object Storage, Brevo, Razorpay) are unchanged and env-driven.
+
+**Deploy-readiness changes already in the codebase:**
+- **Database is PostgreSQL** (`schema.prisma` `provider = "postgresql"` with `directUrl`). The SQLite→Postgres port was clean: all IDs are app-generated UUIDs, JSON is stored as `String` (app parses), bytes as `BigInt`, no SQLite-only constructs. Runtime uses the pooled `DATABASE_URL`; `prisma db push` uses `DIRECT_URL`.
+- **CORS is env-driven** (`server.js` reads comma-separated `FRONTEND_URL`; localhost dev origins always allowed).
+- **Frontend API base is env-driven** (`api/client.js` reads `VITE_API_URL` origin and appends `/api`; falls back to the Vite proxy `/api` in dev).
+- **Netlify SPA fallback** (`frontend/public/_redirects` → `/* /index.html 200`) so deep links don't 404.
+
+**Build/run:** frontend `npm run build` → `frontend/dist` (Netlify publish dir). Backend Render start = `npm start`; build = `npm install && npx prisma generate`. Schema/seed initialized once via `prisma db push` + `npm run db:seed` against the Neon `DIRECT_URL`.
+
+**Still workflow-based, not codified:** no Dockerfile, docker-compose, or CI (.github/) — deployment is configured in the Render/Netlify dashboards, not from repo config files. Prisma still uses schema-push (no migrations dir).
 
 ## 22. Development Workflow
 
@@ -305,7 +317,7 @@ npm run db:studio      # Prisma Studio
 2. **Two money representations:** integer paise (`*Cents` DB fields → `formatCurrency`) vs whole-rupee floats (pricing JSON `price`/`unitPrice`, portal `monthlyPrice`, `charges.amount` → `formatRupees`). Mixing them is the top recurring bug class.
 3. **Logical buckets over one physical OCI bucket** — cheap multi-tenancy; prefix-based isolation; no per-customer OCI provisioning.
 4. **Proxied downloads instead of presigned URLs** — enables metering every GET/egress byte; costs backend bandwidth.
-5. **Synchronous in-request metering + 15-min snapshots** — simplicity over ingestion pipeline; JS-side aggregation acceptable at SQLite scale.
+5. **Synchronous in-request metering + 15-min snapshots** — simplicity over ingestion pipeline; JS-side aggregation acceptable at current scale.
 6. **Schema-push instead of migrations** — fast dev iteration; no migration history (would need to change for production).
 7. **Tenant scoping by convention** (manual `tenantId` in every where) — no global enforcement layer.
 8. **Idempotent env-driven admin seed** — re-runnable baseline that provisions the admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD` without duplicating it or deleting real signup accounts.
@@ -328,7 +340,7 @@ npm run db:studio      # Prisma Studio
 
 ## 25. Security Posture
 
-**Implemented:** bcrypt 12 (passwords) / 10 (OTPs); CSPRNG OTPs hashed at rest with expiry/attempt-lockout/cooldown; enumeration-safe password reset; session revocation on reset/deactivation; API tokens & webhook secrets from `crypto.randomBytes`, tokens stored as SHA-256; object-key sanitization; org-level tenant validation; CORS restricted to localhost:5173; **`helmet` HTTP security headers**; **request logging** (method, path, status, duration); **fail-closed auth** (no dev secret fallback, DB errors → 401); **RBAC (`requireAdminOrMember`) on all 15 admin CRUD route files**; **tenant-scoped IDOR guards on all mutation endpoints**; **Content-Disposition filename sanitization** on downloads; **customer isolation on storage upload/delete** for portal users; coupon discount range validation.
+**Implemented:** bcrypt 12 (passwords) / 10 (OTPs); CSPRNG OTPs hashed at rest with expiry/attempt-lockout/cooldown; enumeration-safe password reset; session revocation on reset/deactivation; API tokens & webhook secrets from `crypto.randomBytes`, tokens stored as SHA-256; object-key sanitization; org-level tenant validation; **env-driven CORS allowlist** (localhost dev origins + `FRONTEND_URL`); **`helmet` HTTP security headers**; **request logging** (method, path, status, duration); **fail-closed auth** (no dev secret fallback, DB errors → 401); **RBAC (`requireAdminOrMember`) on all 15 admin CRUD route files**; **tenant-scoped IDOR guards on all mutation endpoints**; **Content-Disposition filename sanitization** on downloads; **customer isolation on storage upload/delete** for portal users; coupon discount range validation.
 
 **Remaining gaps (ranked):**
 1. JWT in localStorage (XSS-exfiltratable) — httpOnly cookies would require CORS changes.
@@ -343,7 +355,7 @@ npm run db:studio      # Prisma Studio
 - Adopt zod for comprehensive input validation; add HTTP rate limiting; move JWT to httpOnly cookies.
 - Delete OCI objects on account deletion; use notification preferences before creating notifications.
 - Invoice PDF generation + email delivery; billing emails generally.
-- Postgres migration + Prisma migrations for production; deployment setup (Docker/CI).
+- Adopt Prisma migrations (currently schema-push); codify deployment as repo config (Docker/CI) — currently dashboard-configured on Render/Netlify.
 - Remove dead code: React Query (or adopt it), unused frontend assets, duplicate `.progress-bar` CSS.
 - Tests (none exist).
 

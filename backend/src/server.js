@@ -48,7 +48,12 @@ app.locals.prisma = prisma;
 app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled to allow frontend SPA
 
 // Middleware
-app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'], credentials: true }));
+const devOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const prodOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors({ origin: [...devOrigins, ...prodOrigins], credentials: true }));
 
 // Request logger
 app.use((req, res, next) => {

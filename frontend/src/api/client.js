@@ -3,7 +3,10 @@
  * Centralized HTTP client for all backend API calls.
  */
 
-const API_BASE = '/api';
+// In production set VITE_API_URL to the backend origin (e.g. https://api.cloudvitta.in);
+// in dev it is unset and requests go through the Vite proxy at /api.
+const apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/+$/, '');
+const API_BASE = apiOrigin ? `${apiOrigin}/api` : '/api';
 
 class ApiClient {
   constructor() {
