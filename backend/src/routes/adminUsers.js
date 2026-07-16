@@ -16,7 +16,7 @@ router.get('/', async (req, res, next) => {
     const prisma = req.app.locals.prisma;
     const { role, status, search, page = 1, limit = 25 } = req.query;
 
-    const where = { organizationId: req.user.organizationId };
+    const where = {};
 
     if (role) where.role = role;
     if (status === 'active') where.deactivatedAt = null;
@@ -64,7 +64,7 @@ router.get('/:id', async (req, res, next) => {
   try {
     const prisma = req.app.locals.prisma;
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
+      where: { id: req.params.id },
       select: {
         id: true, email: true, displayName: true, role: true, phone: true,
         isVerified: true, lastLoginAt: true, deactivatedAt: true,
@@ -125,7 +125,7 @@ router.put('/:id', async (req, res, next) => {
     const { role, deactivate } = req.body;
 
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
+      where: { id: req.params.id },
     });
 
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -172,7 +172,7 @@ router.delete('/:id', async (req, res, next) => {
     }
 
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
+      where: { id: req.params.id },
     });
 
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -238,7 +238,7 @@ router.get('/:id/sessions', async (req, res, next) => {
   try {
     const prisma = req.app.locals.prisma;
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
+      where: { id: req.params.id },
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -256,7 +256,7 @@ router.get('/:id/notifications', async (req, res, next) => {
   try {
     const prisma = req.app.locals.prisma;
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
+      where: { id: req.params.id },
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
