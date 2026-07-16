@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react';
-import { User, Shield, Trash2, Lock, Monitor, Key, LogOut, AlertTriangle, Check, Copy, Plus, X, Clock, Globe } from 'lucide-react';
+import { User, Shield, Trash2, Lock, Monitor, Key, LogOut, AlertTriangle, Check, Copy, Plus, Clock, Globe } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import TabPills from '../../components/ui/TabPills';
+import { formatDate } from '../../lib/format';
+import { parseUA } from '../../lib/uiMaps';
 import { toast } from 'sonner';
-
-function parseUA(ua) {
-  if (!ua) return 'Unknown device';
-  if (ua.includes('Chrome')) return 'Chrome';
-  if (ua.includes('Firefox')) return 'Firefox';
-  if (ua.includes('Safari')) return 'Safari';
-  if (ua.includes('Edge')) return 'Edge';
-  return ua.substring(0, 40);
-}
 
 export default function CustomerAccount() {
   const [tab, setTab] = useState('profile');
@@ -43,6 +40,8 @@ export default function CustomerAccount() {
   const [newKeyName, setNewKeyName] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
   const [newToken, setNewToken] = useState(null);
+  const [revokeKeyTarget, setRevokeKeyTarget] = useState(null);
+  const [showRevokeAll, setShowRevokeAll] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -104,7 +103,6 @@ export default function CustomerAccount() {
   };
 
   const handleRevokeAll = async () => {
-    if (!confirm('Revoke all other sessions? You will remain logged in.')) return;
     try {
       await api.revokeAllSessions();
       toast.success('All other sessions revoked');
@@ -121,6 +119,7 @@ export default function CustomerAccount() {
       toast.success('Account deleted');
       api.setToken(null); api.setTenantId(null); api.setCustomerId(null); api.setRole(null);
       localStorage.clear();
+      // Intentional hard redirect: fully resets the SPA after account deletion.
       window.location.href = '/login';
     } catch (err) { toast.error(err.message); }
     finally { setDeleting(false); }
@@ -141,12 +140,11 @@ export default function CustomerAccount() {
     finally { setCreatingKey(false); }
   };
 
-  const handleRevokeKey = async (id, name) => {
-    if (!confirm(`Revoke API key "${name}"?`)) return;
+  const handleRevokeKey = async (key) => {
     try {
-      await api.revokePortalApiKey(id);
+      await api.revokePortalApiKey(key.id);
       toast.success('API key revoked');
-      setKeys((k) => k.map((key) => key.id === id ? { ...key, isActive: false } : key));
+      setKeys((k) => k.map((item) => item.id === key.id ? { ...item, isActive: false } : item));
     } catch (err) { toast.error(err.message); }
   };
 
@@ -156,7 +154,7 @@ export default function CustomerAccount() {
     { key: 'delete', label: 'Delete Account', icon: Trash2 },
   ];
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchData} />;
 
   return (
@@ -167,14 +165,7 @@ export default function CustomerAccount() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 rounded-lg bg-cv-surface-2 inline-flex">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${tab === t.key ? 'bg-cv-primary text-white' : 'text-cv-text-secondary hover:text-cv-text'}`}>
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={tabs} active={tab} onChange={setTab} />
 
       {/* ─── Profile Tab ─── */}
       {tab === 'profile' && (
@@ -219,7 +210,7 @@ export default function CustomerAccount() {
           {/* Account Info */}
           <div className="glass-card p-6">
             <h3 className="text-sm font-semibold text-cv-text mb-4">Account Information</h3>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-cv-text-muted">Account ID</span>
                 <p className="font-mono text-cv-text text-xs mt-1">{profile?.id}</p>
@@ -230,11 +221,11 @@ export default function CustomerAccount() {
               </div>
               <div>
                 <span className="text-cv-text-muted">Member Since</span>
-                <p className="text-cv-text mt-1">{profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—'}</p>
+                <p className="text-cv-text mt-1">{profile?.createdAt ? formatDate(profile.createdAt, 'long') : '—'}</p>
               </div>
               <div>
                 <span className="text-cv-text-muted">Last Login</span>
-                <p className="text-cv-text mt-1">{profile?.lastLoginAt ? new Date(profile.lastLoginAt).toLocaleString() : 'Never'}</p>
+                <p className="text-cv-text mt-1">{profile?.lastLoginAt ? formatDate(profile.lastLoginAt, 'datetime') : 'Never'}</p>
               </div>
             </div>
           </div>
@@ -270,7 +261,7 @@ export default function CustomerAccount() {
           <div className="glass-card p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-cv-text flex items-center gap-2"><Monitor size={16} className="text-cv-accent" /> Active Sessions</h3>
-              <button onClick={handleRevokeAll} className="btn btn-danger btn-sm"><LogOut size={14} /> Revoke All Others</button>
+              <button onClick={() => setShowRevokeAll(true)} className="btn btn-danger btn-sm"><LogOut size={14} /> Revoke All Others</button>
             </div>
             <div className="space-y-3">
               {sessions.filter(s => s.isActive).length === 0 ? (
@@ -285,7 +276,7 @@ export default function CustomerAccount() {
                         {s.isCurrent && <span className="ml-2 text-xs text-cv-success">(This device)</span>}
                       </p>
                       <p className="text-xs text-cv-text-muted flex items-center gap-2">
-                        <Globe size={10} /> {s.ipAddress || 'Unknown IP'} · Last active {new Date(s.lastActiveAt).toLocaleString()}
+                        <Globe size={10} /> {s.ipAddress || 'Unknown IP'} · Last active {formatDate(s.lastActiveAt, 'datetime')}
                       </p>
                     </div>
                   </div>
@@ -304,11 +295,11 @@ export default function CustomerAccount() {
               {sessions.slice(0, 10).map((s) => (
                 <div key={s.id} className="flex items-center justify-between text-xs py-2 border-b border-cv-border last:border-0">
                   <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${s.isActive ? 'bg-cv-success' : 'bg-cv-text-muted'}`} />
+                    <span className={`w-2 h-2 rounded-full ${s.isActive ? 'bg-cv-success' : 'bg-cv-text-muted'}`} aria-hidden="true" />
                     <span className="text-cv-text">{parseUA(s.userAgent)}</span>
                     <span className="text-cv-text-muted">· {s.ipAddress || '—'}</span>
                   </div>
-                  <span className="text-cv-text-muted">{new Date(s.createdAt).toLocaleString()}</span>
+                  <span className="text-cv-text-muted">{formatDate(s.createdAt, 'datetime')}</span>
                 </div>
               ))}
               {sessions.length === 0 && <p className="text-sm text-cv-text-muted">No login history</p>}
@@ -334,22 +325,30 @@ export default function CustomerAccount() {
             )}
 
             {keys.length > 0 ? (
-              <div className="space-y-2">
-                {keys.map((k) => (
-                  <div key={k.id} className="flex items-center justify-between p-3 rounded-lg bg-cv-bg border border-cv-border">
-                    <div>
-                      <p className="text-sm text-cv-text font-medium">{k.name}</p>
-                      <p className="text-xs text-cv-text-muted font-mono">{k.prefix}••••••••</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`badge ${k.isActive ? 'badge-active' : 'badge-cancelled'}`}>{k.isActive ? 'Active' : 'Revoked'}</span>
-                      {k.isActive && (
-                        <button onClick={() => handleRevokeKey(k.id, k.name)} className="text-cv-danger text-xs font-medium hover:text-red-400">Revoke</button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Key Prefix</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keys.map((k) => (
+                    <tr key={k.id}>
+                      <td className="font-medium">{k.name}</td>
+                      <td className="font-mono text-cv-text-muted">{k.prefix}••••••••</td>
+                      <td><span className={`badge ${k.isActive ? 'badge-active' : 'badge-cancelled'}`}>{k.isActive ? 'Active' : 'Revoked'}</span></td>
+                      <td className="text-right">
+                        {k.isActive && (
+                          <button onClick={() => setRevokeKeyTarget(k)} className="text-cv-danger text-xs font-medium hover:text-cv-danger/80">Revoke</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             ) : (
               <p className="text-sm text-cv-text-muted">No API keys</p>
             )}
@@ -404,24 +403,41 @@ export default function CustomerAccount() {
       )}
 
       {/* Create Key Modal */}
-      {showKeyCreate && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowKeyCreate(false)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-cv-text">Create API Key</h3>
-              <button onClick={() => setShowKeyCreate(false)} className="text-cv-text-muted hover:text-cv-text"><X size={18} /></button>
-            </div>
-            <form onSubmit={handleCreateKey}>
-              <label className="form-label">Key Name</label>
-              <input className="form-input mb-4" placeholder="e.g., Production Key" value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} required />
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowKeyCreate(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={creatingKey}>{creatingKey ? 'Creating...' : 'Create Key'}</button>
-              </div>
-            </form>
+      <Modal open={showKeyCreate} onClose={() => setShowKeyCreate(false)} title="Create API Key">
+        <form onSubmit={handleCreateKey}>
+          <label className="form-label" htmlFor="account-key-name">Key Name</label>
+          <input id="account-key-name" className="form-input mb-4" placeholder="e.g., Production Key" value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} required />
+          <div className="flex gap-3 justify-end">
+            <button type="button" onClick={() => setShowKeyCreate(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={creatingKey}>
+              {creatingKey && <span className="btn-spinner" />}
+              {creatingKey ? 'Creating...' : 'Create Key'}
+            </button>
           </div>
-        </div>
-      )}
+        </form>
+      </Modal>
+
+      {/* Revoke-all sessions confirmation */}
+      <ConfirmDialog
+        open={showRevokeAll}
+        onClose={() => setShowRevokeAll(false)}
+        onConfirm={handleRevokeAll}
+        title="Revoke all other sessions?"
+        message="Every device except this one will be signed out. You will remain logged in here."
+        confirmLabel="Revoke All"
+        danger
+      />
+
+      {/* Revoke API key confirmation */}
+      <ConfirmDialog
+        open={!!revokeKeyTarget}
+        onClose={() => setRevokeKeyTarget(null)}
+        onConfirm={() => handleRevokeKey(revokeKeyTarget)}
+        title="Revoke API key?"
+        message={`Revoke API key "${revokeKeyTarget?.name}"? Applications using it will stop working.`}
+        confirmLabel="Revoke"
+        danger
+      />
     </div>
   );
 }

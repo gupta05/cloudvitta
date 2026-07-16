@@ -23,9 +23,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           mobileOffset="12px"
           toastOptions={{
             style: {
-              background: '#18181b',
-              border: '1px solid #27272a',
-              color: '#fafafa',
+              background: 'var(--color-cv-surface)',
+              border: '1px solid var(--color-cv-border)',
+              color: 'var(--color-cv-text)',
               maxWidth: 'calc(100vw - 32px)',
               wordBreak: 'break-word',
             },

@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { HelpCircle, Info, Shield, FileText, ChevronDown, ChevronUp, MessageSquare, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { HelpCircle, Info, Shield, FileText, ChevronDown, ChevronUp, MessageSquare, ExternalLink, Zap } from 'lucide-react';
+import TabPills from '../../components/ui/TabPills';
 import { toast } from 'sonner';
 
 const faqData = [
@@ -45,14 +47,7 @@ export default function CustomerHelp() {
         <p className="text-cv-text-secondary text-sm mt-1">Get help, learn about CloudVitta, and review our policies</p>
       </div>
 
-      <div className="flex gap-1 mb-6 p-1 rounded-lg bg-cv-surface-2 inline-flex flex-wrap">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${tab === t.key ? 'bg-cv-primary text-white' : 'text-cv-text-secondary hover:text-cv-text'}`}>
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={tabs} active={tab} onChange={setTab} />
 
       {/* ─── Help Center ─── */}
       {tab === 'help' && (
@@ -66,6 +61,7 @@ export default function CustomerHelp() {
                   <button
                     onClick={() => setOpenFaq(openFaq === i ? null : i)}
                     className="w-full flex items-center justify-between p-4 text-left hover:bg-cv-surface-2 transition-colors"
+                    aria-expanded={openFaq === i}
                   >
                     <span className="text-sm font-medium text-cv-text">{faq.q}</span>
                     {openFaq === i ? <ChevronUp size={16} className="text-cv-text-muted" /> : <ChevronDown size={16} className="text-cv-text-muted" />}
@@ -106,9 +102,9 @@ export default function CustomerHelp() {
               <h3 className="text-sm font-semibold text-cv-text">API Documentation</h3>
               <p className="text-xs text-cv-text-muted mt-1">Learn how to integrate CloudVitta storage into your applications</p>
             </div>
-            <a href="/portal/developer" className="btn btn-secondary btn-sm flex items-center gap-1">
+            <Link to="/portal/developer" className="btn btn-secondary btn-sm flex items-center gap-1">
               View Docs <ExternalLink size={12} />
-            </a>
+            </Link>
           </div>
         </div>
       )}
@@ -119,7 +115,7 @@ export default function CustomerHelp() {
           <div className="glass-card p-8">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-cv-primary">
-                <span className="text-2xl">⚡</span>
+                <Zap size={24} className="text-white" />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-cv-text">CloudVitta</h2>

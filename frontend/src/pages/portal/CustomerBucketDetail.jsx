@@ -1,25 +1,15 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Upload, Download, Trash2, File, Image, Film, FileText, Archive, Search, FolderOpen } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { Upload, Download, Trash2, Search, FolderOpen } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import EmptyState from '../../components/ui/EmptyState';
+import PageHeader from '../../components/ui/PageHeader';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { formatBytes, formatDate } from '../../lib/format';
+import { getFileIcon } from '../../lib/uiMaps';
 import { toast } from 'sonner';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
-}
-
-function getFileIcon(contentType) {
-  if (contentType?.startsWith('image/')) return { icon: Image, color: '#22c55e' };
-  if (contentType?.startsWith('video/')) return { icon: Film, color: '#ef4444' };
-  if (contentType?.startsWith('text/')) return { icon: FileText, color: '#3b82f6' };
-  if (contentType?.includes('zip') || contentType?.includes('tar') || contentType?.includes('gzip')) return { icon: Archive, color: '#f59e0b' };
-  return { icon: File, color: '#71717a' };
-}
 
 export default function CustomerBucketDetail() {
   const { id } = useParams();
@@ -29,6 +19,8 @@ export default function CustomerBucketDetail() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const fileInputRef = useRef(null);
 
   const fetchData = async () => {
@@ -86,7 +78,6 @@ export default function CustomerBucketDetail() {
   };
 
   const handleDelete = async (obj) => {
-    if (!confirm(`Delete "${obj.key}"?`)) return;
     try {
       await api.deleteObject(id, obj.id);
       toast.success('File deleted');
@@ -96,43 +87,47 @@ export default function CustomerBucketDetail() {
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchData} />;
 
   const filteredObjects = objects.filter(o => !search || o.key.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Link to="/portal/storage" className="p-2 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted hover:text-cv-text transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <div>
-            <div className="flex items-center gap-2">
-              <FolderOpen size={20} className="text-cv-accent" />
-              <h1 className="text-2xl font-bold text-cv-text">{bucket?.name}</h1>
-            </div>
-            <p className="text-cv-text-secondary text-sm mt-0.5">{formatBytes(Number(bucket?.usedBytes || 0))} • {bucket?.objectCount || 0} objects</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <input type="file" ref={fileInputRef} onChange={handleUpload} multiple className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} className="btn btn-primary" disabled={uploading}>
-            <Upload size={16} /> {uploading ? 'Uploading...' : 'Upload Files'}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title={bucket?.name}
+        subtitle={`${formatBytes(Number(bucket?.usedBytes || 0))} • ${bucket?.objectCount || 0} objects`}
+        backTo="/portal/storage"
+        titleIcon={FolderOpen}
+        actions={
+          <>
+            <input type="file" ref={fileInputRef} onChange={handleUpload} multiple className="hidden" />
+            <button onClick={() => fileInputRef.current?.click()} className="btn btn-primary" disabled={uploading}>
+              {uploading ? <span className="btn-spinner" /> : <Upload size={16} />}
+              {uploading ? 'Uploading...' : 'Upload Files'}
+            </button>
+          </>
+        }
+      />
 
-      {/* Dropzone */}
+      {/* Dropzone (click, keyboard, or drag & drop) */}
       <div
-        className="dropzone mb-6 text-center"
-        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('active'); }}
-        onDragLeave={(e) => e.currentTarget.classList.remove('active')}
+        className={`dropzone mb-6 text-center ${dragOver ? 'active' : ''}`}
+        role="button"
+        tabIndex={0}
+        aria-label="Upload files"
+        onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault();
-          e.currentTarget.classList.remove('active');
+          setDragOver(false);
           const dt = new DataTransfer();
           for (const f of e.dataTransfer.files) dt.items.add(f);
           if (fileInputRef.current) {
@@ -153,6 +148,7 @@ export default function CustomerBucketDetail() {
             type="text"
             className="form-input pl-9"
             placeholder="Search files..."
+            aria-label="Search files"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -174,24 +170,24 @@ export default function CustomerBucketDetail() {
             </thead>
             <tbody>
               {filteredObjects.map((obj) => {
-                const { icon: FileIcon, color } = getFileIcon(obj.contentType);
+                const { Icon: FileIcon, colorClass } = getFileIcon(obj.contentType);
                 return (
                   <tr key={obj.id}>
                     <td>
                       <div className="flex items-center gap-2">
-                        <FileIcon size={16} style={{ color }} />
+                        <FileIcon size={16} className={colorClass} />
                         <span className="font-medium truncate max-w-xs">{obj.key}</span>
                       </div>
                     </td>
                     <td className="font-mono text-cv-text-secondary">{formatBytes(Number(obj.sizeBytes || 0))}</td>
                     <td className="text-cv-text-muted">{obj.contentType?.split('/').pop() || '—'}</td>
-                    <td className="text-cv-text-muted">{new Date(obj.createdAt).toLocaleDateString()}</td>
+                    <td className="text-cv-text-muted">{formatDate(obj.createdAt)}</td>
                     <td>
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => handleDownload(obj)} className="p-1.5 rounded-md text-cv-text-muted hover:text-cv-primary hover:bg-cv-surface-3 transition-colors" title="Download">
+                        <button onClick={() => handleDownload(obj)} className="icon-btn" aria-label={`Download ${obj.key}`}>
                           <Download size={14} />
                         </button>
-                        <button onClick={() => handleDelete(obj)} className="p-1.5 rounded-md text-cv-text-muted hover:text-cv-danger hover:bg-red-500/10 transition-colors" title="Delete">
+                        <button onClick={() => setDeleteTarget(obj)} className="icon-btn icon-btn-danger" aria-label={`Delete ${obj.key}`}>
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -203,16 +199,25 @@ export default function CustomerBucketDetail() {
           </table>
         </div>
       ) : objects.length > 0 ? (
-        <div className="glass-card p-8 text-center text-cv-text-muted">
-          <p className="text-sm">No files matching "{search}"</p>
-        </div>
+        <EmptyState icon={Search} message={`No files matching "${search}"`} compact />
       ) : (
-        <div className="glass-card p-12 text-center">
-          <Upload size={48} className="mx-auto mb-4 text-cv-text-muted opacity-30" />
-          <h3 className="text-lg font-semibold text-cv-text mb-2">Empty bucket</h3>
-          <p className="text-sm text-cv-text-muted">Upload your first file to get started</p>
-        </div>
+        <EmptyState
+          icon={Upload}
+          title="Empty bucket"
+          message="Upload your first file to get started"
+        />
       )}
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => handleDelete(deleteTarget)}
+        title="Delete file?"
+        message={`Delete "${deleteTarget?.key}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }

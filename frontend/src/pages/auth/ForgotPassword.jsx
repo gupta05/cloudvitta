@@ -40,7 +40,7 @@ export default function ForgotPassword() {
         </div>
 
         {/* Card */}
-        <div className="glass-card p-7 glow-primary">
+        <div className="glass-card p-7">
           <Link to="/login" className="inline-flex items-center gap-1.5 text-cv-text-muted hover:text-cv-text text-sm mb-5 transition-colors">
             <ArrowLeft size={14} />
             Back to sign in
@@ -58,8 +58,9 @@ export default function ForgotPassword() {
 
           <form onSubmit={handleSubmit} className="space-y-5 mt-5">
             <div>
-              <label className="form-label">Email</label>
+              <label className="form-label" htmlFor="forgot-email">Email</label>
               <input
+                id="forgot-email"
                 type="email"
                 className="form-input"
                 placeholder="you@company.com"
@@ -70,14 +71,8 @@ export default function ForgotPassword() {
               />
             </div>
             <button type="submit" className="btn btn-primary w-full justify-center py-2.5" disabled={loading}>
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Sending reset code...
-                </span>
-              ) : (
-                'Send Reset Code'
-              )}
+              {loading && <span className="btn-spinner" />}
+              {loading ? 'Sending reset code...' : 'Send Reset Code'}
             </button>
           </form>
 

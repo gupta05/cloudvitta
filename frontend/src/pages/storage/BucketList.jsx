@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FolderOpen, Plus, Trash2, HardDrive, X } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, HardDrive } from 'lucide-react';
 import api from '../../api/client';
 import { toast } from 'sonner';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(i > 2 ? 2 : 0)} ${sizes[i]}`;
-}
+import { formatBytes, formatDate } from '../../lib/format';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import EmptyState from '../../components/ui/EmptyState';
+import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 export default function BucketList() {
   const [buckets, setBuckets] = useState([]);
@@ -19,6 +16,7 @@ export default function BucketList() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name: '', customerId: '', region: 'us-east-1' });
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const isAdmin = api.isAdmin();
 
@@ -60,10 +58,9 @@ export default function BucketList() {
     }
   }
 
-  async function handleDelete(bucketId, bucketName) {
-    if (!confirm(`Delete bucket "${bucketName}"? This cannot be undone.`)) return;
+  async function handleDelete(bucket) {
     try {
-      await api.deleteBucket(bucketId);
+      await api.deleteBucket(bucket.id);
       toast.success('Bucket deleted');
       loadData();
     } catch (err) {
@@ -71,11 +68,14 @@ export default function BucketList() {
     }
   }
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
+
+  // Scale meters relative to the largest bucket (no fixed quota at admin level)
+  const maxBucketBytes = Math.max(1, ...buckets.map((b) => b.usedBytes || 0));
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-cv-text">{isAdmin ? 'Storage Buckets' : 'My Buckets'}</h1>
           <p className="text-cv-text-secondary text-sm mt-1">
@@ -98,7 +98,7 @@ export default function BucketList() {
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-zinc-800 border border-zinc-700 group-hover:bg-zinc-700 transition-colors">
+                <div className="icon-chip">
                   <FolderOpen size={20} className="text-cv-accent" />
                 </div>
                 <div>
@@ -107,89 +107,97 @@ export default function BucketList() {
                 </div>
               </div>
               <button
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(bucket.id, bucket.name); }}
-                className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 text-cv-text-muted hover:text-cv-danger transition-all"
-                title="Delete bucket"
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDeleteTarget(bucket); }}
+                className="icon-btn icon-btn-danger opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`Delete bucket ${bucket.name}`}
               >
                 <Trash2 size={14} />
               </button>
             </div>
 
-            {/* Storage meter */}
+            {/* Storage meter (relative to largest bucket) */}
             <div className="mb-3">
               <div className="flex items-center justify-between text-xs mb-1">
                 <span className="text-cv-text-secondary">{formatBytes(bucket.usedBytes)} used</span>
                 <span className="text-cv-text-muted">{(bucket._count?.objects || bucket.objectCount || 0).toLocaleString()} objects</span>
               </div>
               <div className="storage-meter">
-                <div className="storage-meter-fill" style={{ width: `${Math.min(100, (bucket.usedBytes / (50 * 1024 * 1024 * 1024)) * 100)}%` }} />
+                <div className="storage-meter-fill" style={{ width: `${Math.min(100, ((bucket.usedBytes || 0) / maxBucketBytes) * 100)}%` }} />
               </div>
             </div>
 
             <div className="flex items-center justify-between text-xs text-cv-text-muted">
               <span>{bucket.region}</span>
-              <span>{new Date(bucket.createdAt).toLocaleDateString()}</span>
+              <span>{formatDate(bucket.createdAt)}</span>
             </div>
           </Link>
         ))}
 
         {buckets.length === 0 && (
-          <div className="col-span-full glass-card p-12 text-center">
-            <HardDrive size={48} className="mx-auto mb-3 text-cv-text-muted opacity-30" />
-            <p className="text-cv-text-secondary mb-1">No buckets yet</p>
-            <p className="text-cv-text-muted text-sm mb-4">Create your first bucket to start storing objects</p>
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary">
-              <Plus size={16} /> Create Bucket
-            </button>
+          <div className="col-span-full">
+            <EmptyState
+              icon={HardDrive}
+              title="No buckets yet"
+              message="Create your first bucket to start storing objects"
+              action={
+                <button onClick={() => setShowCreate(true)} className="btn btn-primary">
+                  <Plus size={16} /> Create Bucket
+                </button>
+              }
+            />
           </div>
         )}
       </div>
 
       {/* Create Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="glass-card p-6 w-full max-w-md glow-primary">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-bold text-cv-text">Create Bucket</h2>
-              <button onClick={() => setShowCreate(false)} className="p-1 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted"><X size={18} /></button>
-            </div>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="form-label">Bucket Name</label>
-                <input type="text" className="form-input" placeholder="my-app-assets" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required pattern="^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$" title="3-63 chars, lowercase, alphanumeric, dots, hyphens" />
-                <p className="text-xs text-cv-text-muted mt-1">Lowercase letters, numbers, dots, hyphens (3-63 chars)</p>
-              </div>
-              {/* Customer dropdown — only shown to admins */}
-              {isAdmin && (
-                <div>
-                  <label className="form-label">Customer</label>
-                  <select className="form-input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required>
-                    <option value="">Select customer...</option>
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div>
-                <label className="form-label">Region</label>
-                <select className="form-input" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })}>
-                  <option value="us-east-1">US East (N. Virginia)</option>
-                  <option value="us-west-2">US West (Oregon)</option>
-                  <option value="eu-west-1">EU (Ireland)</option>
-                  <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-                </select>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary flex-1 justify-center">Cancel</button>
-                <button type="submit" className="btn btn-primary flex-1 justify-center" disabled={creating}>
-                  {creating ? 'Creating...' : 'Create Bucket'}
-                </button>
-              </div>
-            </form>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Bucket">
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <label className="form-label" htmlFor="bucket-name">Bucket Name</label>
+            <input id="bucket-name" type="text" className="form-input" placeholder="my-app-assets" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required pattern="^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$" title="3-63 chars, lowercase, alphanumeric, dots, hyphens" />
+            <p className="text-xs text-cv-text-muted mt-1">Lowercase letters, numbers, dots, hyphens (3-63 chars)</p>
           </div>
-        </div>
-      )}
+          {/* Customer dropdown — only shown to admins */}
+          {isAdmin && (
+            <div>
+              <label className="form-label" htmlFor="bucket-customer">Customer</label>
+              <select id="bucket-customer" className="form-input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required>
+                <option value="">Select customer...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="form-label" htmlFor="bucket-region">Region</label>
+            <select id="bucket-region" className="form-input" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })}>
+              <option value="us-east-1">US East (N. Virginia)</option>
+              <option value="us-west-2">US West (Oregon)</option>
+              <option value="eu-west-1">EU (Ireland)</option>
+              <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+            </select>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary flex-1 justify-center">Cancel</button>
+            <button type="submit" className="btn btn-primary flex-1 justify-center" disabled={creating}>
+              {creating && <span className="btn-spinner" />}
+              {creating ? 'Creating...' : 'Create Bucket'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => handleDelete(deleteTarget)}
+        title="Delete bucket?"
+        message={`Delete bucket "${deleteTarget?.name}"? All objects inside will be permanently removed. This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }

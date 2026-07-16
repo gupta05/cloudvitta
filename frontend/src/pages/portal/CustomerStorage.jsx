@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FolderOpen, Plus, Trash2, HardDrive, X } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, HardDrive } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import EmptyState from '../../components/ui/EmptyState';
+import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { formatBytes, formatDate } from '../../lib/format';
 import { toast } from 'sonner';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
-}
 
 export default function CustomerStorage() {
   const [buckets, setBuckets] = useState([]);
@@ -20,6 +17,7 @@ export default function CustomerStorage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const fetchBuckets = async () => {
     setLoading(true);
@@ -53,10 +51,9 @@ export default function CustomerStorage() {
     }
   };
 
-  const handleDelete = async (bucketId, name) => {
-    if (!confirm(`Delete bucket "${name}"? This cannot be undone.`)) return;
+  const handleDelete = async (bucket) => {
     try {
-      await api.deleteBucket(bucketId);
+      await api.deleteBucket(bucket.id);
       toast.success('Bucket deleted');
       fetchBuckets();
     } catch (err) {
@@ -64,7 +61,7 @@ export default function CustomerStorage() {
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchBuckets} />;
 
   return (
@@ -91,7 +88,7 @@ export default function CustomerStorage() {
             <div key={bucket.id} className="glass-card p-5 hover:border-cv-border-light transition-colors group">
               <div className="flex items-start justify-between mb-3">
                 <Link to={`/portal/storage/${bucket.id}`} className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-zinc-800 border border-zinc-700 group-hover:bg-zinc-700 transition-colors">
+                  <div className="icon-chip group-hover:bg-cv-surface-2 transition-colors">
                     <FolderOpen size={20} className="text-cv-accent" />
                   </div>
                   <div className="min-w-0">
@@ -99,13 +96,17 @@ export default function CustomerStorage() {
                     <p className="text-xs text-cv-text-muted">{bucket.objectCount || 0} objects</p>
                   </div>
                 </Link>
-                <button onClick={() => handleDelete(bucket.id, bucket.name)} className="p-1.5 rounded-md text-cv-text-muted hover:text-cv-danger hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all">
+                <button
+                  onClick={() => setDeleteTarget(bucket)}
+                  className="icon-btn icon-btn-danger opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all"
+                  aria-label={`Delete bucket ${bucket.name}`}
+                >
                   <Trash2 size={14} />
                 </button>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-cv-text-secondary font-mono">{formatBytes(Number(bucket.usedBytes || 0))}</span>
-                <span className="text-cv-text-muted">{new Date(bucket.createdAt).toLocaleDateString()}</span>
+                <span className="text-cv-text-muted">{formatDate(bucket.createdAt)}</span>
               </div>
               <div className="mt-2 storage-meter">
                 <div className="storage-meter-fill" style={{ width: `${fillPct}%` }} />
@@ -115,47 +116,54 @@ export default function CustomerStorage() {
           }); })()}
         </div>
       ) : (
-        <div className="glass-card p-12 text-center">
-          <HardDrive size={48} className="mx-auto mb-4 text-cv-text-muted opacity-30" />
-          <h3 className="text-lg font-semibold text-cv-text mb-2">No buckets yet</h3>
-          <p className="text-sm text-cv-text-muted mb-4">Create your first bucket to start storing files</p>
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary">
-            <Plus size={16} /> Create Bucket
-          </button>
-        </div>
+        <EmptyState
+          icon={HardDrive}
+          title="No buckets yet"
+          message="Create your first bucket to start storing files"
+          action={
+            <button onClick={() => setShowCreate(true)} className="btn btn-primary">
+              <Plus size={16} /> Create Bucket
+            </button>
+          }
+        />
       )}
 
       {/* Create Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowCreate(false)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-cv-text">Create Bucket</h3>
-              <button onClick={() => setShowCreate(false)} className="text-cv-text-muted hover:text-cv-text"><X size={18} /></button>
-            </div>
-            <form onSubmit={handleCreate}>
-              <label className="form-label">Bucket Name</label>
-              <input
-                type="text"
-                className="form-input mb-4"
-                placeholder="my-files"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                pattern="[a-z0-9][a-z0-9-]*[a-z0-9]"
-                title="Lowercase letters, numbers, and hyphens only"
-                required
-              />
-              <p className="text-xs text-cv-text-muted mb-4">Use lowercase letters, numbers, and hyphens. Minimum 3 characters.</p>
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={creating}>
-                  {creating ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </form>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Bucket">
+        <form onSubmit={handleCreate}>
+          <label className="form-label" htmlFor="bucket-name">Bucket Name</label>
+          <input
+            id="bucket-name"
+            type="text"
+            className="form-input mb-4"
+            placeholder="my-files"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            pattern="[a-z0-9][a-z0-9-]*[a-z0-9]"
+            title="Lowercase letters, numbers, and hyphens only"
+            required
+          />
+          <p className="text-xs text-cv-text-muted mb-4">Use lowercase letters, numbers, and hyphens. Minimum 3 characters.</p>
+          <div className="flex gap-3 justify-end">
+            <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={creating}>
+              {creating && <span className="btn-spinner" />}
+              {creating ? 'Creating...' : 'Create'}
+            </button>
           </div>
-        </div>
-      )}
+        </form>
+      </Modal>
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => handleDelete(deleteTarget)}
+        title="Delete bucket?"
+        message={`Delete bucket "${deleteTarget?.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }

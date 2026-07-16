@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { Zap, ArrowLeft, KeyRound, RefreshCw, Eye, EyeOff } from 'lucide-react';
+import { Zap, ArrowLeft, KeyRound, Eye, EyeOff } from 'lucide-react';
 import api from '../../api/client';
 import { toast } from 'sonner';
+import OtpInput, { OtpExpiryBar, OtpResend } from '../../components/ui/OtpInput';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_SECONDS = 10 * 60; // 10 minutes
@@ -23,7 +24,7 @@ export default function ResetPassword() {
   const [resendCooldown, setResendCooldown] = useState(RESEND_COOLDOWN_SECONDS);
   const [resending, setResending] = useState(false);
 
-  const inputRefs = useRef([]);
+  const otpRef = useRef(null);
 
   // Redirect if no email in navigation state (user hit this page directly)
   useEffect(() => {
@@ -46,47 +47,9 @@ export default function ResetPassword() {
     return () => clearInterval(timer);
   }, [resendCooldown]);
 
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
-  const handleChange = (index, value) => {
-    if (value && !/^\d$/.test(value)) return;
+  const handleOtpChange = (next) => {
     setError('');
-    const newOtp = [...otp];
-    newOtp[index] = value;
-    setOtp(newOtp);
-    if (value && index < OTP_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-    if (e.key === 'ArrowLeft' && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-    if (e.key === 'ArrowRight' && index < OTP_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handlePaste = (e) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH);
-    if (pasted.length === 0) return;
-    setError('');
-    const newOtp = [...otp];
-    for (let i = 0; i < pasted.length; i++) {
-      newOtp[i] = pasted[i];
-    }
-    setOtp(newOtp);
-    const focusIndex = Math.min(pasted.length, OTP_LENGTH - 1);
-    inputRefs.current[focusIndex]?.focus();
+    setOtp(next);
   };
 
   const handleSubmit = async (e) => {
@@ -116,7 +79,7 @@ export default function ResetPassword() {
       setError(err.message);
       // Clear the OTP so the user re-enters a fresh code on failure
       setOtp(Array(OTP_LENGTH).fill(''));
-      inputRefs.current[0]?.focus();
+      otpRef.current?.focusFirst();
     } finally {
       setLoading(false);
     }
@@ -132,7 +95,7 @@ export default function ResetPassword() {
       setResendCooldown(RESEND_COOLDOWN_SECONDS);
       setTimeLeft(OTP_EXPIRY_SECONDS);
       setOtp(Array(OTP_LENGTH).fill(''));
-      inputRefs.current[0]?.focus();
+      otpRef.current?.focusFirst();
     } catch (err) {
       if (err.message.includes('wait')) {
         toast.error(err.message);
@@ -161,7 +124,7 @@ export default function ResetPassword() {
         </div>
 
         {/* Card */}
-        <div className="glass-card p-7 glow-primary">
+        <div className="glass-card p-7">
           <Link to="/forgot-password" className="inline-flex items-center gap-1.5 text-cv-text-muted hover:text-cv-text text-sm mb-5 transition-colors">
             <ArrowLeft size={14} />
             Back
@@ -182,61 +145,31 @@ export default function ResetPassword() {
 
           {/* Timer */}
           <div className="mt-4 mb-5">
-            {timeLeft > 0 ? (
-              <div className="flex items-center gap-2 text-xs text-cv-text-muted">
-                <div className="w-full bg-cv-surface-2 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-1000 ease-linear"
-                    style={{
-                      width: `${(timeLeft / OTP_EXPIRY_SECONDS) * 100}%`,
-                      background: timeLeft > 120 ? 'var(--color-cv-primary)' : timeLeft > 60 ? '#f59e0b' : '#ef4444',
-                    }}
-                  />
-                </div>
-                <span className="shrink-0 tabular-nums font-mono" style={{ color: timeLeft > 120 ? undefined : timeLeft > 60 ? '#f59e0b' : '#ef4444' }}>
-                  {formatTime(timeLeft)}
-                </span>
-              </div>
-            ) : (
-              <p className="text-xs text-red-400">Code expired. Please request a new one.</p>
-            )}
+            <OtpExpiryBar timeLeft={timeLeft} totalSeconds={OTP_EXPIRY_SECONDS} />
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* OTP Input */}
             <div>
               <label className="form-label">Reset code</label>
-              <div className="flex gap-2 justify-center" onPaste={handlePaste}>
-                {otp.map((digit, index) => (
-                  <input
-                    key={index}
-                    ref={(el) => (inputRefs.current[index] = el)}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={digit}
-                    onChange={(e) => handleChange(index, e.target.value)}
-                    onKeyDown={(e) => handleKeyDown(index, e)}
-                    disabled={loading}
-                    className="w-12 h-14 text-center text-2xl font-bold rounded-lg border bg-cv-surface-2 text-cv-text
-                               focus:outline-none focus:ring-2 focus:ring-cv-primary/50 focus:border-cv-primary
-                               transition-all duration-200 font-mono
-                               disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{
-                      borderColor: error ? 'rgba(239, 68, 68, 0.5)' : digit ? 'rgba(99, 102, 241, 0.4)' : 'var(--color-cv-border)',
-                      caretColor: 'var(--color-cv-primary)',
-                    }}
-                    autoFocus={index === 0}
-                  />
-                ))}
-              </div>
+              <OtpInput
+                ref={otpRef}
+                length={OTP_LENGTH}
+                value={otp}
+                onChange={handleOtpChange}
+                disabled={loading}
+                error={!!error}
+                submitOnPaste={false}
+                label="Reset code"
+              />
             </div>
 
             {/* New password */}
             <div>
-              <label className="form-label">New password</label>
+              <label className="form-label" htmlFor="reset-password">New password</label>
               <div className="relative">
                 <input
+                  id="reset-password"
                   type={showPw ? 'text' : 'password'}
                   className="form-input pr-10"
                   placeholder="Min 6 characters"
@@ -245,7 +178,7 @@ export default function ResetPassword() {
                   required
                   minLength={6}
                 />
-                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text">
+                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text" aria-label={showPw ? 'Hide password' : 'Show password'}>
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -253,8 +186,9 @@ export default function ResetPassword() {
 
             {/* Confirm password */}
             <div>
-              <label className="form-label">Confirm new password</label>
+              <label className="form-label" htmlFor="reset-confirm">Confirm new password</label>
               <input
+                id="reset-confirm"
                 type={showPw ? 'text' : 'password'}
                 className="form-input"
                 placeholder="Re-enter your new password"
@@ -267,7 +201,7 @@ export default function ResetPassword() {
 
             {/* Error */}
             {error && (
-              <p className="text-red-400 text-sm text-center animate-fade-in">{error}</p>
+              <p className="text-cv-danger text-sm text-center animate-fade-in" role="alert">{error}</p>
             )}
 
             {/* Submit */}
@@ -276,34 +210,13 @@ export default function ResetPassword() {
               className="btn btn-primary w-full justify-center py-2.5"
               disabled={loading || otp.some((d) => d === '') || timeLeft <= 0}
             >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Resetting password...
-                </span>
-              ) : (
-                'Reset Password'
-              )}
+              {loading && <span className="btn-spinner" />}
+              {loading ? 'Resetting password...' : 'Reset Password'}
             </button>
           </form>
 
           {/* Resend */}
-          <div className="mt-5 text-center">
-            <p className="text-xs text-cv-text-muted mb-2">Didn't receive the code?</p>
-            <button
-              onClick={handleResend}
-              disabled={resendCooldown > 0 || resending}
-              className="inline-flex items-center gap-1.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ color: resendCooldown > 0 ? 'var(--color-cv-text-muted)' : 'var(--color-cv-primary)' }}
-            >
-              <RefreshCw size={14} className={resending ? 'animate-spin' : ''} />
-              {resending
-                ? 'Sending...'
-                : resendCooldown > 0
-                ? `Resend in ${resendCooldown}s`
-                : 'Resend Code'}
-            </button>
-          </div>
+          <OtpResend cooldown={resendCooldown} resending={resending} onResend={handleResend} />
         </div>
       </div>
     </div>

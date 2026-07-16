@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Check, X, IndianRupee } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { Check, X, IndianRupee } from 'lucide-react';
 import api from '../../api/client';
 import { formatCurrency } from '../../lib/currency';
+import { formatDate } from '../../lib/format';
 import { toast } from 'sonner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PageHeader from '../../components/ui/PageHeader';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 export default function InvoiceDetail() {
   const { id } = useParams();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showVoid, setShowVoid] = useState(false);
 
   const fetchInvoice = () => api.getInvoice(id).then(setInvoice).finally(() => setLoading(false));
   useEffect(() => { fetchInvoice(); }, [id]);
@@ -18,37 +23,37 @@ export default function InvoiceDetail() {
       if (action === 'finalize') await api.finalizeInvoice(id);
       else if (action === 'pay') await api.markInvoicePaid(id);
       else if (action === 'void') await api.voidInvoice(id);
-      toast.success(`Invoice ${action}ed!`);
+      toast.success(action === 'void' ? 'Invoice voided' : action === 'pay' ? 'Invoice marked paid' : 'Invoice finalized');
       fetchInvoice();
     } catch (e) { toast.error(e.message); }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (!invoice) return <div className="text-center py-20 text-cv-text-muted">Invoice not found</div>;
 
   const fmt = formatCurrency;
 
   return (
     <div className="max-w-3xl">
-      <Link to="/invoices" className="inline-flex items-center gap-1.5 text-sm text-cv-text-secondary hover:text-cv-text mb-4"><ArrowLeft size={16} /> Back</Link>
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-cv-text">{invoice.invoiceNumber}</h1>
-          <p className="text-cv-text-secondary text-sm mt-1">{invoice.customer?.name} • {invoice.subscription?.planVersion?.plan?.name || 'Manual'}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`badge badge-${invoice.status.toLowerCase()}`}>{invoice.status}</span>
-          {invoice.status === 'DRAFT' && <button className="btn btn-primary btn-sm" onClick={() => handleAction('finalize')}><Check size={14} /> Finalize</button>}
-          {invoice.status === 'FINALIZED' && <button className="btn btn-primary btn-sm" onClick={() => handleAction('pay')}><IndianRupee size={14} /> Mark Paid</button>}
-          {['DRAFT', 'FINALIZED'].includes(invoice.status) && <button className="btn btn-danger btn-sm" onClick={() => handleAction('void')}><X size={14} /> Void</button>}
-        </div>
-      </div>
+      <PageHeader
+        title={invoice.invoiceNumber}
+        subtitle={`${invoice.customer?.name} • ${invoice.subscription?.planVersion?.plan?.name || 'Manual'}`}
+        backTo="/invoices"
+        actions={
+          <>
+            <span className={`badge badge-${invoice.status.toLowerCase()}`}>{invoice.status}</span>
+            {invoice.status === 'DRAFT' && <button className="btn btn-primary btn-sm" onClick={() => handleAction('finalize')}><Check size={14} /> Finalize</button>}
+            {invoice.status === 'FINALIZED' && <button className="btn btn-primary btn-sm" onClick={() => handleAction('pay')}><IndianRupee size={14} /> Mark Paid</button>}
+            {['DRAFT', 'FINALIZED'].includes(invoice.status) && <button className="btn btn-danger btn-sm" onClick={() => setShowVoid(true)}><X size={14} /> Void</button>}
+          </>
+        }
+      />
 
       {/* Info */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Period</p><p className="text-sm font-medium mt-1">{new Date(invoice.periodStart).toLocaleDateString()} — {new Date(invoice.periodEnd).toLocaleDateString()}</p></div>
-        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Issue Date</p><p className="text-sm font-medium mt-1">{new Date(invoice.issueDate).toLocaleDateString()}</p></div>
-        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Due Date</p><p className="text-sm font-medium mt-1">{new Date(invoice.dueDate).toLocaleDateString()}</p></div>
+        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Period</p><p className="text-sm font-medium mt-1">{formatDate(invoice.periodStart)} — {formatDate(invoice.periodEnd)}</p></div>
+        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Issue Date</p><p className="text-sm font-medium mt-1">{formatDate(invoice.issueDate)}</p></div>
+        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Due Date</p><p className="text-sm font-medium mt-1">{formatDate(invoice.dueDate)}</p></div>
         <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Currency</p><p className="text-sm font-medium mt-1">{invoice.currency}</p></div>
       </div>
 
@@ -73,7 +78,7 @@ export default function InvoiceDetail() {
         <div className="border-t border-cv-border mt-4 pt-4 space-y-2">
           <div className="flex justify-between text-sm"><span className="text-cv-text-secondary">Subtotal</span><span className="font-medium">{fmt(invoice.subtotalCents)}</span></div>
           {invoice.taxCents > 0 && <div className="flex justify-between text-sm"><span className="text-cv-text-secondary">Tax</span><span>{fmt(invoice.taxCents)}</span></div>}
-          <div className="flex justify-between text-lg font-bold border-t border-cv-border pt-2"><span>Total</span><span className="gradient-text">{fmt(invoice.totalCents)}</span></div>
+          <div className="flex justify-between text-lg font-bold border-t border-cv-border pt-2"><span>Total</span><span className="text-cv-accent">{fmt(invoice.totalCents)}</span></div>
           {invoice.amountDueCents > 0 && invoice.status !== 'PAID' && (
             <div className="flex justify-between text-sm text-cv-danger"><span>Amount Due</span><span className="font-bold">{fmt(invoice.amountDueCents)}</span></div>
           )}
@@ -92,6 +97,16 @@ export default function InvoiceDetail() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={showVoid}
+        onClose={() => setShowVoid(false)}
+        onConfirm={() => handleAction('void')}
+        title="Void invoice?"
+        message={`This will void invoice ${invoice.invoiceNumber}. Voided invoices cannot be reopened.`}
+        confirmLabel="Void Invoice"
+        danger
+      />
     </div>
   );
 }

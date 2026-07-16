@@ -3,7 +3,9 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, FileText, Printer } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import { formatCurrency } from '../../lib/currency';
+import { formatDate } from '../../lib/format';
 
 export default function CustomerInvoiceDetail() {
   const { id } = useParams();
@@ -26,16 +28,16 @@ export default function CustomerInvoiceDetail() {
 
   useEffect(() => { fetchData(); }, [id]);
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchData} />;
   if (!invoice) return <ErrorBanner message="Invoice not found" />;
 
   return (
     <div className="animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
-          <Link to="/portal/billing" className="p-2 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted hover:text-cv-text transition-colors">
+          <Link to="/portal/billing" className="icon-btn" aria-label="Back to billing">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -44,8 +46,8 @@ export default function CustomerInvoiceDetail() {
               <h1 className="text-2xl font-bold text-cv-text">{invoice.invoiceNumber}</h1>
               <span className={`badge badge-${invoice.status.toLowerCase()}`}>{invoice.status}</span>
             </div>
-            <p className="text-cv-text-secondary text-sm mt-0.5">
-              {new Date(invoice.periodStart).toLocaleDateString()} — {new Date(invoice.periodEnd).toLocaleDateString()}
+            <p className="text-cv-text-secondary text-sm mt-1">
+              {formatDate(invoice.periodStart)} — {formatDate(invoice.periodEnd)}
             </p>
           </div>
         </div>
@@ -59,11 +61,11 @@ export default function CustomerInvoiceDetail() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 pb-6 border-b border-cv-border">
           <div>
             <p className="text-xs text-cv-text-muted uppercase font-semibold">Issue Date</p>
-            <p className="text-sm text-cv-text mt-1">{new Date(invoice.issueDate).toLocaleDateString()}</p>
+            <p className="text-sm text-cv-text mt-1">{formatDate(invoice.issueDate)}</p>
           </div>
           <div>
             <p className="text-xs text-cv-text-muted uppercase font-semibold">Due Date</p>
-            <p className="text-sm text-cv-text mt-1">{new Date(invoice.dueDate).toLocaleDateString()}</p>
+            <p className="text-sm text-cv-text mt-1">{formatDate(invoice.dueDate)}</p>
           </div>
           <div>
             <p className="text-xs text-cv-text-muted uppercase font-semibold">Plan</p>
@@ -71,7 +73,7 @@ export default function CustomerInvoiceDetail() {
           </div>
           <div>
             <p className="text-xs text-cv-text-muted uppercase font-semibold">Status</p>
-            <p className="text-sm text-cv-text mt-1">{invoice.paidAt ? `Paid ${new Date(invoice.paidAt).toLocaleDateString()}` : invoice.status}</p>
+            <p className="text-sm text-cv-text mt-1">{invoice.paidAt ? `Paid ${formatDate(invoice.paidAt)}` : invoice.status}</p>
           </div>
         </div>
 

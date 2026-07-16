@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Check, X } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { Check } from 'lucide-react';
 import api from '../../api/client';
 import { toast } from 'sonner';
+import { formatRupees } from '../../lib/currency';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PageHeader from '../../components/ui/PageHeader';
 
 export default function PlanDetail() {
   const { id } = useParams();
@@ -16,16 +19,16 @@ export default function PlanDetail() {
     try { await api.publishPlan(id); toast.success('Plan published!'); fetchPlan(); } catch (err) { toast.error(err.message); }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (!plan) return <div className="text-center py-20 text-cv-text-muted">Plan not found</div>;
 
   const renderPricing = (pricingStr) => {
     try {
       const p = JSON.parse(pricingStr || '{}');
       switch (p.model) {
-        case 'flat': return `₹${p.price || 0} flat`;
-        case 'per_unit': return `₹${p.unitPrice || 0} / unit`;
-        case 'package': return `₹${p.packagePrice || 0} / ${p.packageSize || 1} units`;
+        case 'flat': return `${formatRupees(p.price || 0)} flat`;
+        case 'per_unit': return `${formatRupees(p.unitPrice || 0)} / unit`;
+        case 'package': return `${formatRupees(p.packagePrice || 0)} / ${p.packageSize || 1} units`;
         case 'tiered': return `${(p.tiers || []).length} tiers`;
         default: return p.model || 'Unknown';
       }
@@ -36,17 +39,17 @@ export default function PlanDetail() {
 
   return (
     <div>
-      <Link to="/plans" className="inline-flex items-center gap-1.5 text-sm text-cv-text-secondary hover:text-cv-text mb-4"><ArrowLeft size={16} /> Back to Plans</Link>
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-cv-text">{plan.name}</h1>
-          <p className="text-cv-text-secondary text-sm mt-1">{plan.description || 'No description'} • {plan.productFamily?.name}</p>
-        </div>
-        <div className="flex gap-2">
-          <span className={`badge badge-${plan.status === 'ACTIVE' ? 'active' : 'draft'}`}>{plan.status}</span>
-          {plan.status === 'DRAFT' && <button className="btn btn-primary btn-sm" onClick={handlePublish}><Check size={14} /> Publish</button>}
-        </div>
-      </div>
+      <PageHeader
+        title={plan.name}
+        subtitle={`${plan.description || 'No description'} • ${plan.productFamily?.name}`}
+        backTo="/plans"
+        actions={
+          <>
+            <span className={`badge badge-${plan.status === 'ACTIVE' ? 'active' : 'draft'}`}>{plan.status}</span>
+            {plan.status === 'DRAFT' && <button className="btn btn-primary btn-sm" onClick={handlePublish}><Check size={14} /> Publish</button>}
+          </>
+        }
+      />
 
       {/* Versions */}
       {plan.versions?.map((version) => (

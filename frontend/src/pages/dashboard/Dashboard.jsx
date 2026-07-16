@@ -1,27 +1,13 @@
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { Users, CreditCard, FileText, TrendingUp, AlertCircle, Zap, HardDrive, FolderOpen } from 'lucide-react';
+import { Users, CreditCard, FileText, TrendingUp, Zap, HardDrive } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
-import { formatCurrency } from '../../lib/currency';
-
-function StatCard({ icon: Icon, label, value, subValue, color }) {
-  return (
-    <div className="glass-card p-5 hover:scale-[1.02] transition-transform duration-200">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold text-cv-text-muted uppercase tracking-wide">{label}</p>
-          <p className="text-2xl font-bold text-cv-text mt-1">{value}</p>
-          {subValue && <p className="text-xs text-cv-text-secondary mt-1">{subValue}</p>}
-        </div>
-        <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: `${color}20`, border: `1px solid ${color}40` }}>
-          <Icon size={20} style={{ color }} />
-        </div>
-      </div>
-    </div>
-  );
-}
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import StatCard from '../../components/ui/StatCard';
+import { formatCurrency, formatRupees } from '../../lib/currency';
+import { PRIMARY, PRIMARY_HOVER, GRID_STROKE, AXIS_STROKE, TOOLTIP_STYLE } from '../../lib/chartTheme';
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -39,7 +25,7 @@ export default function Dashboard() {
 
   useEffect(() => { fetchStats(); }, []);
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchStats} />;
 
   const revenueData = stats?.monthlyRevenue?.map((m) => ({
@@ -61,10 +47,10 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard icon={TrendingUp} label="Monthly Recurring Revenue" value={formatCurrency(stats?.mrrCents || 0)} color="#3b82f6" />
-        <StatCard icon={Users} label="Total Customers" value={stats?.totalCustomers || 0} subValue={`${stats?.activeSubscriptions || 0} active subscriptions`} color="#64748b" />
-        <StatCard icon={CreditCard} label="Active Subscriptions" value={stats?.activeSubscriptions || 0} subValue={`${stats?.trialSubscriptions || 0} in trial`} color="#22c55e" />
-        <StatCard icon={FileText} label="Invoices" value={stats?.totalInvoices || 0} subValue={stats?.overdueInvoices > 0 ? `${stats.overdueInvoices} overdue` : `${stats?.paidInvoices || 0} paid`} color={stats?.overdueInvoices > 0 ? '#ef4444' : '#f59e0b'} />
+        <StatCard icon={TrendingUp} label="Monthly Recurring Revenue" value={formatCurrency(stats?.mrrCents || 0)} accent="primary" />
+        <StatCard icon={Users} label="Total Customers" value={stats?.totalCustomers || 0} subValue={`${stats?.activeSubscriptions || 0} active subscriptions`} accent="neutral" />
+        <StatCard icon={CreditCard} label="Active Subscriptions" value={stats?.activeSubscriptions || 0} subValue={`${stats?.trialSubscriptions || 0} in trial`} accent="success" />
+        <StatCard icon={FileText} label="Invoices" value={stats?.totalInvoices || 0} subValue={stats?.overdueInvoices > 0 ? `${stats.overdueInvoices} overdue` : `${stats?.paidInvoices || 0} paid`} accent={stats?.overdueInvoices > 0 ? 'danger' : 'warning'} />
       </div>
 
       {/* Charts */}
@@ -74,14 +60,14 @@ export default function Dashboard() {
           <h3 className="text-sm font-semibold text-cv-text mb-4">Revenue (Last 12 Months)</h3>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={revenueData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-              <XAxis dataKey="month" stroke="#52525b" fontSize={12} />
-              <YAxis stroke="#52525b" fontSize={12} tickFormatter={(v) => `₹${v}`} />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="month" stroke={AXIS_STROKE} fontSize={12} />
+              <YAxis stroke={AXIS_STROKE} fontSize={12} tickFormatter={(v) => formatRupees(v)} />
               <Tooltip
-                contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '6px', color: '#fafafa' }}
-                formatter={(v) => [`₹${v.toFixed(2)}`, 'Revenue']}
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(v) => [formatRupees(v), 'Revenue']}
               />
-              <Line type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} activeDot={{ r: 5, fill: '#60a5fa' }} />
+              <Line type="monotone" dataKey="revenue" stroke={PRIMARY} strokeWidth={2} dot={{ fill: PRIMARY, r: 3 }} activeDot={{ r: 5, fill: PRIMARY_HOVER }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -92,11 +78,11 @@ export default function Dashboard() {
           {subStatusData.length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={subStatusData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis type="number" stroke="#52525b" fontSize={12} />
-                <YAxis dataKey="status" type="category" stroke="#52525b" fontSize={11} width={80} />
-                <Tooltip contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '6px', color: '#fafafa' }} />
-                <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+                <XAxis type="number" stroke={AXIS_STROKE} fontSize={12} />
+                <YAxis dataKey="status" type="category" stroke={AXIS_STROKE} fontSize={11} width={80} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} />
+                <Bar dataKey="count" fill={PRIMARY} radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -114,7 +100,7 @@ export default function Dashboard() {
           <Link to="/storage" className="glass-card p-5 block hover:border-cv-primary/50 transition-all duration-200 group">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-zinc-800 border border-zinc-700">
+                <div className="icon-chip">
                   <HardDrive size={20} className="text-cv-accent" />
                 </div>
                 <div>

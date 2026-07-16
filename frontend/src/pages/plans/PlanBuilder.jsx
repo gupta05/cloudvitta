@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import api from '../../api/client';
 import { toast } from 'sonner';
+import PageHeader from '../../components/ui/PageHeader';
 
 const FEE_TYPES = ['RECURRING', 'USAGE', 'ONETIME', 'SLOT', 'CAPACITY', 'RATE'];
 const PRICING_MODELS = ['flat', 'per_unit', 'tiered', 'package'];
@@ -18,7 +19,8 @@ export default function PlanBuilder() {
 
   useEffect(() => {
     Promise.all([api.getProductFamilies(), api.getBillableMetrics()])
-      .then(([f, m]) => { setFamilies(f.data); setMetrics(m.data); });
+      .then(([f, m]) => { setFamilies(f.data); setMetrics(m.data); })
+      .catch((err) => toast.error(err.message || 'Failed to load catalog data'));
   }, []);
 
   const addComponent = () => {
@@ -61,33 +63,32 @@ export default function PlanBuilder() {
 
   return (
     <div className="max-w-3xl">
-      <Link to="/plans" className="inline-flex items-center gap-1.5 text-sm text-cv-text-secondary hover:text-cv-text mb-4"><ArrowLeft size={16} /> Back to Plans</Link>
-      <h1 className="text-2xl font-bold text-cv-text mb-6">Create Plan</h1>
+      <PageHeader title="Create Plan" backTo="/plans" />
 
       <form onSubmit={handleSubmit}>
         {/* Basic Info */}
         <div className="glass-card p-6 mb-6">
           <h3 className="text-sm font-semibold text-cv-text mb-4">Plan Details</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2"><label className="form-label">Name *</label><input className="form-input" value={plan.name} onChange={(e) => setPlan({ ...plan, name: e.target.value })} required /></div>
-            <div className="col-span-2"><label className="form-label">Description</label><input className="form-input" value={plan.description} onChange={(e) => setPlan({ ...plan, description: e.target.value })} /></div>
-            <div><label className="form-label">Product Family *</label>
-              <select className="form-input" value={plan.productFamilyId} onChange={(e) => setPlan({ ...plan, productFamilyId: e.target.value })} required>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2"><label className="form-label" htmlFor="plan-name">Name *</label><input id="plan-name" className="form-input" value={plan.name} onChange={(e) => setPlan({ ...plan, name: e.target.value })} required /></div>
+            <div className="sm:col-span-2"><label className="form-label" htmlFor="plan-desc">Description</label><input id="plan-desc" className="form-input" value={plan.description} onChange={(e) => setPlan({ ...plan, description: e.target.value })} /></div>
+            <div><label className="form-label" htmlFor="plan-family">Product Family *</label>
+              <select id="plan-family" className="form-input" value={plan.productFamilyId} onChange={(e) => setPlan({ ...plan, productFamilyId: e.target.value })} required>
                 <option value="">Select...</option>
                 {families.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
               </select>
             </div>
-            <div><label className="form-label">Plan Type</label>
-              <select className="form-input" value={plan.planType} onChange={(e) => setPlan({ ...plan, planType: e.target.value })}>
+            <div><label className="form-label" htmlFor="plan-type">Plan Type</label>
+              <select id="plan-type" className="form-input" value={plan.planType} onChange={(e) => setPlan({ ...plan, planType: e.target.value })}>
                 <option>STANDARD</option><option>FREE</option><option>CUSTOM</option>
               </select>
             </div>
-            <div><label className="form-label">Billing Period</label>
-              <select className="form-input" value={plan.billingPeriod} onChange={(e) => setPlan({ ...plan, billingPeriod: e.target.value })}>
+            <div><label className="form-label" htmlFor="plan-period">Billing Period</label>
+              <select id="plan-period" className="form-input" value={plan.billingPeriod} onChange={(e) => setPlan({ ...plan, billingPeriod: e.target.value })}>
                 <option>MONTHLY</option><option>QUARTERLY</option><option>ANNUAL</option>
               </select>
             </div>
-            <div><label className="form-label">Trial Days</label><input type="number" className="form-input" value={plan.trialDays} onChange={(e) => setPlan({ ...plan, trialDays: e.target.value })} min="0" /></div>
+            <div><label className="form-label" htmlFor="plan-trial">Trial Days</label><input id="plan-trial" type="number" className="form-input" value={plan.trialDays} onChange={(e) => setPlan({ ...plan, trialDays: e.target.value })} min="0" /></div>
           </div>
         </div>
 
@@ -104,7 +105,7 @@ export default function PlanBuilder() {
             {components.map((comp, i) => (
               <div key={i} className="p-4 rounded-lg border border-cv-border bg-cv-surface-2 animate-slide-in">
                 <div className="flex items-start gap-3">
-                  <div className="flex-1 grid grid-cols-2 gap-3">
+                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div><label className="form-label text-xs">Component Name</label><input className="form-input" placeholder="Platform Fee" value={comp.name} onChange={(e) => updateComponent(i, 'name', e.target.value)} /></div>
                     <div><label className="form-label text-xs">Fee Type</label>
                       <select className="form-input" value={comp.feeType} onChange={(e) => updateComponent(i, 'feeType', e.target.value)}>
@@ -129,7 +130,7 @@ export default function PlanBuilder() {
                       </>
                     )}
                     {['USAGE', 'CAPACITY', 'SLOT'].includes(comp.feeType) && (
-                      <div className="col-span-2"><label className="form-label text-xs">Billable Metric</label>
+                      <div className="sm:col-span-2"><label className="form-label text-xs">Billable Metric</label>
                         <select className="form-input" value={comp.billableMetricId} onChange={(e) => updateComponent(i, 'billableMetricId', e.target.value)}>
                           <option value="">None</option>
                           {metrics.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.code})</option>)}
@@ -137,7 +138,7 @@ export default function PlanBuilder() {
                       </div>
                     )}
                   </div>
-                  <button type="button" onClick={() => removeComponent(i)} className="p-2 rounded hover:bg-red-500/10 text-cv-text-muted hover:text-cv-danger transition-colors mt-5">
+                  <button type="button" onClick={() => removeComponent(i)} className="icon-btn icon-btn-danger mt-5" aria-label={`Remove component ${comp.name || i + 1}`}>
                     <Trash2 size={16} />
                   </button>
                 </div>
@@ -147,7 +148,10 @@ export default function PlanBuilder() {
         </div>
 
         <div className="flex gap-3">
-          <button type="submit" className="btn btn-primary" disabled={loading}>{loading ? 'Creating...' : 'Create Plan'}</button>
+          <button type="submit" className="btn btn-primary" disabled={loading}>
+            {loading && <span className="btn-spinner" />}
+            {loading ? 'Creating...' : 'Create Plan'}
+          </button>
           <Link to="/plans" className="btn btn-secondary">Cancel</Link>
         </div>
       </form>

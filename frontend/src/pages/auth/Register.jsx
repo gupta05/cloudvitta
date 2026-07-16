@@ -45,35 +45,29 @@ export default function Register() {
           </div>
           <p className="text-cv-text-secondary text-sm">Get started with 500 MB free storage</p>
         </div>
-        <div className="glass-card p-7 glow-primary">
-          <h2 className="text-xl font-bold text-cv-text mb-6">Create Your Account</h2>
+        <div className="glass-card p-7">
+          <h2 className="text-xl font-bold text-cv-text mb-6">Create your account</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="form-label">Full Name</label>
-              <input type="text" className="form-input" placeholder="Jane Doe" value={form.displayName} onChange={update('displayName')} required />
+              <label className="form-label" htmlFor="reg-name">Full Name</label>
+              <input id="reg-name" type="text" className="form-input" placeholder="Jane Doe" value={form.displayName} onChange={update('displayName')} required />
             </div>
             <div>
-              <label className="form-label">Email</label>
-              <input type="email" className="form-input" placeholder="you@company.com" value={form.email} onChange={update('email')} required />
+              <label className="form-label" htmlFor="reg-email">Email</label>
+              <input id="reg-email" type="email" className="form-input" placeholder="you@company.com" value={form.email} onChange={update('email')} required />
             </div>
             <div>
-              <label className="form-label">Password</label>
+              <label className="form-label" htmlFor="reg-password">Password</label>
               <div className="relative">
-                <input type={showPw ? 'text' : 'password'} className="form-input pr-10" placeholder="Min 6 characters" value={form.password} onChange={update('password')} required minLength={6} />
-                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text">
+                <input id="reg-password" type={showPw ? 'text' : 'password'} className="form-input pr-10" placeholder="Min 6 characters" value={form.password} onChange={update('password')} required minLength={6} />
+                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text" aria-label={showPw ? 'Hide password' : 'Show password'}>
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
             <button type="submit" className="btn btn-primary w-full justify-center py-2.5" disabled={loading}>
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Sending verification code...
-                </span>
-              ) : (
-                'Start Free — 500 MB Included'
-              )}
+              {loading && <span className="btn-spinner" />}
+              {loading ? 'Sending verification code...' : 'Start Free — 500 MB Included'}
             </button>
           </form>
           <p className="mt-3 text-center text-xs text-cv-text-muted">No credit card required. Upgrade anytime.</p>

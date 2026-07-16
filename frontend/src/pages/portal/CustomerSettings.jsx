@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Settings, Bell, Globe, Calendar, HardDrive, Eye } from 'lucide-react';
+import { Settings, Bell, Globe, HardDrive, CreditCard, Package, Lock, User } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import TabPills from '../../components/ui/TabPills';
 import { toast } from 'sonner';
 
 export default function CustomerSettings() {
@@ -95,7 +97,7 @@ export default function CustomerSettings() {
   const notificationGroups = [
     {
       title: 'Billing',
-      icon: '💳',
+      icon: CreditCard,
       items: [
         { key: 'invoiceCreated', label: 'Invoice created', desc: 'When a new invoice is generated' },
         { key: 'paymentReceived', label: 'Payment received', desc: 'When a payment is processed' },
@@ -105,7 +107,7 @@ export default function CustomerSettings() {
     },
     {
       title: 'Storage',
-      icon: '📦',
+      icon: Package,
       items: [
         { key: 'storageWarning75', label: '75% storage warning', desc: 'When storage usage reaches 75%' },
         { key: 'storageWarning90', label: '90% storage warning', desc: 'When storage usage reaches 90%' },
@@ -115,7 +117,7 @@ export default function CustomerSettings() {
     },
     {
       title: 'Security',
-      icon: '🔒',
+      icon: Lock,
       items: [
         { key: 'newLogin', label: 'New login alerts', desc: 'When your account is accessed from a new device' },
         { key: 'passwordChanged', label: 'Password changed', desc: 'When your password is updated' },
@@ -124,7 +126,7 @@ export default function CustomerSettings() {
     },
     {
       title: 'Account',
-      icon: '👤',
+      icon: User,
       items: [
         { key: 'accountUpdates', label: 'Account updates', desc: 'Important account-related notifications' },
         { key: 'productNews', label: 'Product news', desc: 'Feature updates and product announcements' },
@@ -132,7 +134,7 @@ export default function CustomerSettings() {
     },
   ];
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchData} />;
 
   return (
@@ -142,14 +144,7 @@ export default function CustomerSettings() {
         <p className="text-cv-text-secondary text-sm mt-1">Configure your account preferences and notifications</p>
       </div>
 
-      <div className="flex gap-1 mb-6 p-1 rounded-lg bg-cv-surface-2 inline-flex">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${tab === t.key ? 'bg-cv-primary text-white' : 'text-cv-text-secondary hover:text-cv-text'}`}>
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={tabs} active={tab} onChange={setTab} />
 
       {/* ─── Preferences Tab ─── */}
       {tab === 'preferences' && prefs && (
@@ -202,7 +197,9 @@ export default function CustomerSettings() {
         <div className="max-w-2xl space-y-6">
           {notificationGroups.map((group) => (
             <div key={group.title} className="glass-card p-6">
-              <h3 className="text-sm font-semibold text-cv-text mb-4">{group.icon} {group.title}</h3>
+              <h3 className="text-sm font-semibold text-cv-text mb-4 flex items-center gap-2">
+                <group.icon size={16} className="text-cv-primary" /> {group.title}
+              </h3>
               <div className="space-y-4">
                 {group.items.map((item) => (
                   <div key={item.key} className="flex items-center justify-between">
@@ -212,6 +209,9 @@ export default function CustomerSettings() {
                     </div>
                     <button
                       onClick={() => toggleNotif(item.key)}
+                      role="switch"
+                      aria-checked={!!notifPrefs[item.key]}
+                      aria-label={item.label}
                       className={`relative w-11 h-6 rounded-full transition-colors ${notifPrefs[item.key] ? 'bg-cv-primary' : 'bg-cv-surface-3 border border-cv-border'}`}
                     >
                       <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${notifPrefs[item.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />

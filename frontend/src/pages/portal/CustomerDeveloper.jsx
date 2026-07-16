@@ -1,8 +1,33 @@
 import { useEffect, useState } from 'react';
-import { Code2, Key, Plus, Copy, Trash2, Check, X, Clock, Shield, ExternalLink } from 'lucide-react';
+import { Code2, Key, Plus, Copy, Check, X, Shield } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import EmptyState from '../../components/ui/EmptyState';
+import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { formatDate } from '../../lib/format';
 import { toast } from 'sonner';
+
+// HTTP method → badge classes
+const METHOD_BADGES = {
+  GET: 'bg-cv-success/10 text-cv-success',
+  POST: 'bg-cv-primary/10 text-cv-primary',
+  DELETE: 'bg-cv-danger/10 text-cv-danger',
+};
+
+function ApiEndpoint({ method, path, desc, curl }) {
+  return (
+    <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${METHOD_BADGES[method] || METHOD_BADGES.GET}`}>{method}</span>
+        <span className="text-sm font-mono text-cv-text">{path}</span>
+      </div>
+      <p className="text-xs text-cv-text-muted mb-2">{desc}</p>
+      <pre className="text-xs font-mono text-cv-text-secondary bg-cv-surface p-3 rounded overflow-x-auto border border-cv-border">{curl}</pre>
+    </div>
+  );
+}
 
 export default function CustomerDeveloper() {
   const [keys, setKeys] = useState([]);
@@ -13,6 +38,7 @@ export default function CustomerDeveloper() {
   const [creating, setCreating] = useState(false);
   const [newToken, setNewToken] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState(null);
 
   const fetchKeys = async () => {
     setLoading(true);
@@ -46,10 +72,9 @@ export default function CustomerDeveloper() {
     }
   };
 
-  const handleRevoke = async (id, name) => {
-    if (!confirm(`Revoke API key "${name}"? This cannot be undone.`)) return;
+  const handleRevoke = async (key) => {
     try {
-      await api.revokePortalApiKey(id);
+      await api.revokePortalApiKey(key.id);
       toast.success('API key revoked');
       fetchKeys();
     } catch (err) {
@@ -64,8 +89,31 @@ export default function CustomerDeveloper() {
     toast.success('Copied to clipboard');
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchKeys} />;
+
+  const endpoints = [
+    {
+      method: 'GET', path: '/api/storage/buckets', desc: 'List all your storage buckets',
+      curl: `curl -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "x-tenant-id: YOUR_TENANT_ID" \\\n  ${window.location.origin}/api/storage/buckets`,
+    },
+    {
+      method: 'POST', path: '/api/storage/buckets/:id/objects', desc: 'Upload a file to a bucket',
+      curl: `curl -X POST -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "x-tenant-id: YOUR_TENANT_ID" \\\n  -F "file=@./my-file.txt" -F "key=my-file.txt" \\\n  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects`,
+    },
+    {
+      method: 'GET', path: '/api/storage/buckets/:id/objects/:objectId', desc: 'Download a file from a bucket',
+      curl: `curl -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "x-tenant-id: YOUR_TENANT_ID" \\\n  -o output.txt \\\n  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects/OBJECT_ID`,
+    },
+    {
+      method: 'GET', path: '/api/storage/buckets/:id/objects', desc: 'List all files in a bucket',
+      curl: `curl -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "x-tenant-id: YOUR_TENANT_ID" \\\n  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects`,
+    },
+    {
+      method: 'DELETE', path: '/api/storage/buckets/:id/objects/:objectId', desc: 'Delete a file from a bucket',
+      curl: `curl -X DELETE -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "x-tenant-id: YOUR_TENANT_ID" \\\n  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects/OBJECT_ID`,
+    },
+  ];
 
   return (
     <div className="animate-fade-in">
@@ -81,7 +129,7 @@ export default function CustomerDeveloper() {
 
       {/* New Token Banner */}
       {newToken && (
-        <div className="glass-card p-5 mb-6 border-cv-warning">
+        <div className="glass-card p-5 mb-6 border-cv-warning" role="alert">
           <div className="flex items-start gap-3">
             <Shield size={20} className="text-cv-warning flex-shrink-0 mt-0.5" />
             <div className="flex-1">
@@ -89,12 +137,14 @@ export default function CustomerDeveloper() {
               <p className="text-xs text-cv-text-muted mb-3">This key will only be shown once. Copy it now and store it securely.</p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 text-xs font-mono bg-cv-bg px-3 py-2 rounded-md text-cv-text border border-cv-border break-all">{newToken}</code>
-                <button onClick={() => copyToClipboard(newToken)} className="btn btn-secondary flex-shrink-0">
+                <button onClick={() => copyToClipboard(newToken)} className="btn btn-secondary flex-shrink-0" aria-label="Copy API key to clipboard">
                   {copied ? <Check size={14} /> : <Copy size={14} />}
                 </button>
               </div>
             </div>
-            <button onClick={() => setNewToken(null)} className="text-cv-text-muted hover:text-cv-text"><X size={16} /></button>
+            <button onClick={() => setNewToken(null)} className="icon-btn" aria-label="Dismiss">
+              <X size={16} />
+            </button>
           </div>
         </div>
       )}
@@ -128,13 +178,11 @@ export default function CustomerDeveloper() {
                       {key.isActive ? 'Active' : 'Revoked'}
                     </span>
                   </td>
-                  <td className="text-cv-text-muted">{new Date(key.createdAt).toLocaleDateString()}</td>
-                  <td className="text-cv-text-muted">
-                    {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString() : 'Never'}
-                  </td>
+                  <td className="text-cv-text-muted">{formatDate(key.createdAt)}</td>
+                  <td className="text-cv-text-muted">{key.lastUsedAt ? formatDate(key.lastUsedAt) : 'Never'}</td>
                   <td>
                     {key.isActive && (
-                      <button onClick={() => handleRevoke(key.id, key.name)} className="text-cv-danger hover:text-red-400 text-xs font-medium">
+                      <button onClick={() => setRevokeTarget(key)} className="text-cv-danger hover:text-cv-danger/80 text-xs font-medium">
                         Revoke
                       </button>
                     )}
@@ -144,12 +192,17 @@ export default function CustomerDeveloper() {
             </tbody>
           </table>
         ) : (
-          <div className="p-8 text-center">
-            <Key size={32} className="mx-auto mb-3 text-cv-text-muted opacity-30" />
-            <p className="text-sm text-cv-text-muted">No API keys yet</p>
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary mt-3">
-              <Plus size={14} /> Create Your First Key
-            </button>
+          <div className="p-4">
+            <EmptyState
+              icon={Key}
+              message="No API keys yet"
+              compact
+              action={
+                <button onClick={() => setShowCreate(true)} className="btn btn-primary">
+                  <Plus size={14} /> Create Your First Key
+                </button>
+              }
+            />
           </div>
         )}
       </div>
@@ -162,109 +215,46 @@ export default function CustomerDeveloper() {
         <p className="text-sm text-cv-text-muted mb-4">Use your API key in the <code className="text-xs bg-cv-bg px-1.5 py-0.5 rounded border border-cv-border font-mono">Authorization</code> header as a Bearer token.</p>
 
         <div className="space-y-4">
-          {/* List Buckets */}
-          <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded">GET</span>
-                <span className="text-sm font-mono text-cv-text">/api/storage/buckets</span>
-              </div>
-            </div>
-            <p className="text-xs text-cv-text-muted mb-2">List all your storage buckets</p>
-            <pre className="text-xs font-mono text-cv-text-secondary bg-zinc-900 p-3 rounded overflow-x-auto border border-zinc-800">{`curl -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "x-tenant-id: YOUR_TENANT_ID" \\
-  ${window.location.origin}/api/storage/buckets`}</pre>
-          </div>
-
-          {/* Upload Object */}
-          <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded">POST</span>
-                <span className="text-sm font-mono text-cv-text">/api/storage/buckets/:id/objects</span>
-              </div>
-            </div>
-            <p className="text-xs text-cv-text-muted mb-2">Upload a file to a bucket</p>
-            <pre className="text-xs font-mono text-cv-text-secondary bg-zinc-900 p-3 rounded overflow-x-auto border border-zinc-800">{`curl -X POST -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "x-tenant-id: YOUR_TENANT_ID" \\
-  -F "file=@./my-file.txt" -F "key=my-file.txt" \\
-  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects`}</pre>
-          </div>
-
-          {/* Download Object */}
-          <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded">GET</span>
-                <span className="text-sm font-mono text-cv-text">/api/storage/buckets/:id/objects/:objectId</span>
-              </div>
-            </div>
-            <p className="text-xs text-cv-text-muted mb-2">Download a file from a bucket</p>
-            <pre className="text-xs font-mono text-cv-text-secondary bg-zinc-900 p-3 rounded overflow-x-auto border border-zinc-800">{`curl -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "x-tenant-id: YOUR_TENANT_ID" \\
-  -o output.txt \\
-  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects/OBJECT_ID`}</pre>
-          </div>
-
-          {/* List Objects */}
-          <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded">GET</span>
-                <span className="text-sm font-mono text-cv-text">/api/storage/buckets/:id/objects</span>
-              </div>
-            </div>
-            <p className="text-xs text-cv-text-muted mb-2">List all files in a bucket</p>
-            <pre className="text-xs font-mono text-cv-text-secondary bg-zinc-900 p-3 rounded overflow-x-auto border border-zinc-800">{`curl -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "x-tenant-id: YOUR_TENANT_ID" \\
-  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects`}</pre>
-          </div>
-
-          {/* Delete Object */}
-          <div className="p-4 rounded-lg bg-cv-bg border border-cv-border">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold bg-red-500/10 text-red-400 px-2 py-0.5 rounded">DELETE</span>
-                <span className="text-sm font-mono text-cv-text">/api/storage/buckets/:id/objects/:objectId</span>
-              </div>
-            </div>
-            <p className="text-xs text-cv-text-muted mb-2">Delete a file from a bucket</p>
-            <pre className="text-xs font-mono text-cv-text-secondary bg-zinc-900 p-3 rounded overflow-x-auto border border-zinc-800">{`curl -X DELETE -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "x-tenant-id: YOUR_TENANT_ID" \\
-  ${window.location.origin}/api/storage/buckets/BUCKET_ID/objects/OBJECT_ID`}</pre>
-          </div>
+          {endpoints.map((ep) => (
+            <ApiEndpoint key={`${ep.method} ${ep.path} ${ep.desc}`} {...ep} />
+          ))}
         </div>
       </div>
 
       {/* Create Key Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowCreate(false)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-cv-text">Create API Key</h3>
-              <button onClick={() => setShowCreate(false)} className="text-cv-text-muted hover:text-cv-text"><X size={18} /></button>
-            </div>
-            <form onSubmit={handleCreate}>
-              <label className="form-label">Key Name</label>
-              <input
-                type="text"
-                className="form-input mb-1"
-                placeholder="e.g., Production Key"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                required
-              />
-              <p className="text-xs text-cv-text-muted mb-4">Give it a descriptive name so you can identify it later.</p>
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={creating}>
-                  {creating ? 'Creating...' : 'Create Key'}
-                </button>
-              </div>
-            </form>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create API Key">
+        <form onSubmit={handleCreate}>
+          <label className="form-label" htmlFor="api-key-name">Key Name</label>
+          <input
+            id="api-key-name"
+            type="text"
+            className="form-input mb-1"
+            placeholder="e.g., Production Key"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            required
+          />
+          <p className="text-xs text-cv-text-muted mb-4">Give it a descriptive name so you can identify it later.</p>
+          <div className="flex gap-3 justify-end">
+            <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={creating}>
+              {creating && <span className="btn-spinner" />}
+              {creating ? 'Creating...' : 'Create Key'}
+            </button>
           </div>
-        </div>
-      )}
+        </form>
+      </Modal>
+
+      {/* Revoke confirmation */}
+      <ConfirmDialog
+        open={!!revokeTarget}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={() => handleRevoke(revokeTarget)}
+        title="Revoke API key?"
+        message={`Revoke API key "${revokeTarget?.name}"? Applications using it will stop working. This cannot be undone.`}
+        confirmLabel="Revoke"
+        danger
+      />
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 > **⚠️ LIVING DOCUMENT — KEEP IN SYNC.** This file is the single source of truth for understanding this project across development sessions. Whenever a significant change lands — new feature, architectural change, integration, refactor, schema modification, infra/deployment change, security improvement, pricing update, auth change — **update the relevant sections of this file in the same piece of work**. It must always describe the *current* implementation, never an aspirational or outdated one.
 >
-> Last synchronized: 2026-07-16 (public marketing landing page at `/` — admin dashboard moved to `/dashboard`, role redirects updated; new `DESIGN.md` documents the design system; frontend-only change, no API/schema/auth changes).
+> Last synchronized: 2026-07-16 (app-wide UI/UX consistency pass: shared UI component library (`components/ui/` — Modal/ConfirmDialog/StatCard/TabPills/Pagination/skeletons/OtpInput), shared `lib/` formatters (en-IN dates, bytes, chart theme, UI maps), mobile drawer in both layout shells, accessibility sweep, `DESIGN.md` rewritten; frontend-only change, no API/schema/auth changes).
 
 ---
 
@@ -220,13 +220,15 @@ Frontend client: `frontend/src/api/client.js` — singleton fetch wrapper, ~100 
 
 ## 14. Frontend Architecture
 
-- **Routing:** all in `App.jsx`, statically imported (no code-splitting). Public `/` = marketing landing page (`pages/landing/LandingPage.jsx` — no layout shell, sticky header, IntersectionObserver scroll-reveal, anchors to #features/#pricing/#faq; shows Log In / Create Account, or an "Open portal/dashboard" shortcut when a token exists). Public auth pages; `/portal/*` inside `CustomerLayout`; admin app inside `AppLayout` with Dashboard at **`/dashboard`** (moved off `/`). Role redirects (Login, OtpVerification, `UserRoute`) send admins/members to `/dashboard`.
+- **Routing:** all in `App.jsx`, statically imported (no code-splitting). Public `/` = marketing landing page (`pages/landing/LandingPage.jsx` — no layout shell, sticky header, IntersectionObserver scroll-reveal, anchors to #features/#pricing/#faq; shows Sign in / Create Account, or an "Open portal/dashboard" shortcut when a token exists). Public auth pages; `/portal/*` inside `CustomerLayout`; admin app inside `AppLayout` with Dashboard at **`/dashboard`** (moved off `/`). Role redirects (Login, OtpVerification, `UserRoute`) send admins/members to `/dashboard`. Internal navigation uses React Router only (no `window.location.href`).
 - **State:** local `useState`/`useEffect` + direct `api.*` calls per page. **React Query is installed and its provider mounted, but has zero consumers** (dead infra). No context providers — auth state = localStorage (`cv_token`, `cv_tenant_id`, `cv_role`, `cv_customer_id`, `cv_user`) + the ApiClient singleton.
-- **Layouts:** `AppLayout` (admin sidebar, sectioned nav, **tenant switcher** → `setTenantId` + full reload, `/auth/me` re-sync on mount) vs `CustomerLayout` (portal sidebar, **notification bell** with unread badge polled every 30s, server-side logout).
-- **Design system:** entirely in `src/index.css` — Tailwind v4 `@theme` with `cv-*` tokens (`bg #09090b`, primary `#3b82f6`), component classes (`.glass-card`, `.data-table`, `.badge badge-{status}`, `.btn`, `.form-input`, `.dropzone`, `.progress-bar`, landing `.landing-grid-bg`/`.reveal` with `prefers-reduced-motion` support). **Dark-only** — no light mode. Documented in root **`DESIGN.md`** (living document, keep in sync).
-- **Charts:** Recharts directly in 4 pages (Dashboard revenue line ₹, subs bar; storage area charts).
-- **Uploads:** native HTML5 drag-drop (admin `BucketDetail` whole-page drop; portal `CustomerBucketDetail` dropzone card) → multipart FormData. Downloads via blob + Content-Disposition parsing.
-- **Toasts:** sonner, top-right, with viewport-overflow hardening (maxWidth calc, word-break) in main.jsx + index.css.
+- **Layouts:** `AppLayout` (admin sidebar `w-64`, sectioned nav, **tenant switcher** → `setTenantId` + full reload with outside-click/Esc close, `/auth/me` re-sync on mount) vs `CustomerLayout` (portal sidebar `w-64`, **notification bell** with unread badge polled every 30s, lucide notification icons). Both shells: server-side logout (`api.logout()` + full `cv_*` cleanup) and a **mobile drawer** (hamburger topbar below `md`, `role="dialog"` drawer with backdrop/Esc close).
+- **Design system:** entirely in `src/index.css` — Tailwind v4 `@theme` with `cv-*` tokens (`bg #09090b`, primary `#3b82f6`, data-viz `cv-viz-purple #8b5cf6`), component classes (`.glass-card`, `.card-header`, `.data-table`, `.badge badge-{status}`, `.btn` (+`.btn-spinner`, `:disabled`), `.icon-btn`/`.icon-chip`, `.form-input`, `.tab-group`/`.tab-pill`, `.skeleton`, `.dropzone`, `.progress-bar`, landing `.landing-grid-bg`/`.reveal`, `:focus-visible` outlines, `prefers-reduced-motion` support). **Dark-only** — no light mode. Documented in root **`DESIGN.md`** (living document, keep in sync).
+- **Shared UI components** (`components/ui/`): `LoadingSpinner`, `ErrorBanner`, `Modal`, `ConfirmDialog` (replaces all native `confirm()`), `StatCard`, `EmptyState`, `PageHeader`, `TabPills`, `Pagination` (used by all paginated lists), `Skeleton`/`TableSkeleton`, `OtpInput` (+`OtpExpiryBar`/`OtpResend`). Shared libs (`lib/`): `currency.js` (`formatCurrency` paise / `formatRupees` rupees), `format.js` (`formatBytes`, `formatDate` — single `en-IN` locale), `chartTheme.js` (Recharts colors/tooltip mirroring tokens), `uiMaps.js` (`ROLE_BADGES`, `PAYMENT_BADGES`, `EVENT_LABELS`, `getFileIcon`, `parseUA`).
+- **Charts:** Recharts themed via `lib/chartTheme.js` (Dashboard revenue line ₹, subs bar; storage area/pie charts).
+- **Uploads:** native HTML5 drag-drop (admin `BucketDetail` whole-page drop; portal `CustomerBucketDetail` accessible dropzone card — `role="button"`, keyboard-triggerable) → multipart FormData. Downloads via blob + Content-Disposition parsing.
+- **Toasts:** sonner, top-right, styled via `cv-*` CSS vars, with viewport-overflow hardening (maxWidth calc, word-break) in main.jsx + index.css.
+- **Accessibility baseline:** modals with focus management, `htmlFor`/`id` on form fields, `aria-label` on icon buttons, `role="switch"` toggles, `role="alert"`/`role="status"` on error/loading states, skeleton loaders for tables.
 
 ## 15. Session Management
 
@@ -301,7 +303,7 @@ npm run db:studio      # Prisma Studio
 ## 23. Important Design Decisions & Trade-offs
 
 1. **`*Cents` field names hold paise** — renaming to `*Paise` after the INR conversion was deemed high-churn/zero-value; semantics ("integer smallest currency unit") unchanged.
-2. **Two money representations:** integer paise (`*Cents` DB fields → `formatCurrency`) vs whole-rupee floats (pricing JSON `price`/`unitPrice`, portal `monthlyPrice`, `charges.amount` → `formatRupees` or `₹${...}`). Mixing them is the top recurring bug class.
+2. **Two money representations:** integer paise (`*Cents` DB fields → `formatCurrency`) vs whole-rupee floats (pricing JSON `price`/`unitPrice`, portal `monthlyPrice`, `charges.amount` → `formatRupees`). Mixing them is the top recurring bug class.
 3. **Logical buckets over one physical OCI bucket** — cheap multi-tenancy; prefix-based isolation; no per-customer OCI provisioning.
 4. **Proxied downloads instead of presigned URLs** — enables metering every GET/egress byte; costs backend bandwidth.
 5. **Synchronous in-request metering + 15-min snapshots** — simplicity over ingestion pipeline; JS-side aggregation acceptable at SQLite scale.
@@ -319,9 +321,8 @@ npm run db:studio      # Prisma Studio
 - No proration on plan changes; `taxCents` always 0.
 - Account deletion cascades DB rows but **does not delete OCI objects** (orphans remain in the bucket).
 - JWT in localStorage (XSS-exfiltratable); portal invoice "download" is a `document.write` print window with unescaped interpolation.
-- `zod` and `uuid` are declared deps but never used (validation is ad-hoc); React Query mounted but unused; `formatRupees`/`CURRENCY_SYMBOL` exported but unused.
+- `zod` and `uuid` are declared deps but never used (validation is ad-hoc); React Query mounted but unused; `CURRENCY_SYMBOL` exported but unused.
 - Dead schema features: `Subscription.PAUSED`, `Customer.balanceCents`, `StorageBucket.isPublic`, `SubscriptionComponent.pricingOverride` (stored, never read by billing), `Invoice.notes`.
-- Minor locale drift: a few date formats still use `en-US` (e.g., `CustomerDashboard.jsx`).
 - Portal contact form is fake (setTimeout + toast, sends nothing).
 - Razorpay webhooks require a public tunnel (e.g. ngrok) in local dev — the verify endpoint carries the happy path, but refunds only arrive via webhook.
 - README project-structure section is stale (predates storage/portal/users pages and OTP flows).

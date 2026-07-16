@@ -21,6 +21,7 @@
   --color-cv-warning: #f59e0b;
   --color-cv-danger: #ef4444;
   --color-cv-info: #3b82f6;
+  --color-cv-viz-purple: #8b5cf6;
 
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 }
@@ -48,17 +49,52 @@ body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* ─── Removed: glow & gradient cosmetics ────────────────── */
-.gradient-text {
+/* Card header row (title + optional action) */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-cv-border);
+}
+
+/* ─── Icon Chip & Icon Button ───────────────────────────── */
+/* Square icon container used in stat cards, list rows, section headers. */
+.icon-chip {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--color-cv-surface-3);
+  border: 1px solid var(--color-cv-border);
+}
+
+/* Icon-only action button (row actions, close buttons). */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  border-radius: 6px;
+  color: var(--color-cv-text-muted);
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+.icon-btn:hover {
+  background: var(--color-cv-surface-3);
   color: var(--color-cv-text);
 }
 
-.glow-primary {
-  /* No-op: glow removed in enterprise theme */
-}
-
-.glow-accent {
-  /* No-op */
+.icon-btn-danger:hover {
+  background: color-mix(in srgb, var(--color-cv-danger) 12%, transparent);
+  color: var(--color-cv-danger);
 }
 
 /* ─── Sidebar Styling ───────────────────────────────────── */
@@ -84,6 +120,15 @@ body {
   background: var(--color-cv-surface-3);
   color: var(--color-cv-text);
   border-left-color: var(--color-cv-primary);
+}
+
+/* ─── Keyboard Focus (system-wide) ──────────────────────── */
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.sidebar-link:focus-visible,
+.tab-pill:focus-visible {
+  outline: 2px solid var(--color-cv-primary);
+  outline-offset: 2px;
 }
 
 /* ─── Table Styles ──────────────────────────────────────── */
@@ -208,6 +253,12 @@ body {
   border: none;
 }
 
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .btn-primary {
   background: var(--color-cv-primary);
   color: white;
@@ -250,20 +301,68 @@ body {
   font-size: 0.8rem;
 }
 
-/* ─── Progress Bar ──────────────────────────────────────── */
-.progress-bar {
-  width: 100%;
-  height: 8px;
-  background: var(--color-cv-surface-3);
+/* Small spinner for inside buttons (pairs with .btn disabled state). */
+.btn-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
   border-radius: 9999px;
-  overflow: hidden;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
 }
 
-.progress-bar-fill {
-  height: 100%;
+/* ─── Tab Pills ─────────────────────────────────────────── */
+.tab-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 8px;
+  background: var(--color-cv-surface-2);
+  margin-bottom: 1.5rem;
+}
+
+.tab-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-cv-text-secondary);
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+.tab-pill:hover {
+  color: var(--color-cv-text);
+}
+
+.tab-pill.active {
   background: var(--color-cv-primary);
-  border-radius: 9999px;
-  transition: width 0.5s ease;
+  color: white;
+}
+
+/* ─── Skeleton Loaders ──────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--color-cv-surface-2) 25%,
+    var(--color-cv-surface-3) 50%,
+    var(--color-cv-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
 /* ─── Storage Meter ─────────────────────────────────────── */
@@ -364,6 +463,10 @@ body {
   .animate-fade-in,
   .animate-slide-in {
     animation: none;
+  }
+  .skeleton {
+    animation: none;
+    background: var(--color-cv-surface-2);
   }
 }
 

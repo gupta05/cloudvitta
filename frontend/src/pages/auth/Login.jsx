@@ -50,26 +50,27 @@ export default function Login() {
         </div>
 
         {/* Card */}
-        <div className="glass-card p-7 glow-primary">
+        <div className="glass-card p-7">
           <h2 className="text-xl font-bold text-cv-text mb-6">Sign in to your account</h2>
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="form-label">Email</label>
-              <input type="email" className="form-input" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <label className="form-label" htmlFor="login-email">Email</label>
+              <input id="login-email" type="email" className="form-input" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
             </div>
             <div>
               <div className="flex items-center justify-between">
-                <label className="form-label">Password</label>
+                <label className="form-label" htmlFor="login-password">Password</label>
                 <Link to="/forgot-password" className="text-xs text-cv-primary hover:text-cv-primary-hover font-medium">Forgot password?</Link>
               </div>
               <div className="relative">
-                <input type={showPw ? 'text' : 'password'} className="form-input pr-10" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
-                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text">
+                <input id="login-password" type={showPw ? 'text' : 'password'} className="form-input pr-10" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2 text-cv-text-muted hover:text-cv-text" aria-label={showPw ? 'Hide password' : 'Show password'}>
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
             <button type="submit" className="btn btn-primary w-full justify-center py-2.5" disabled={loading}>
+              {loading && <span className="btn-spinner" />}
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>

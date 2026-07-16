@@ -233,7 +233,7 @@ export default function LandingPage() {
               </Link>
             ) : (
               <>
-                <Link to="/login" className="btn btn-ghost btn-sm">Log in</Link>
+                <Link to="/login" className="btn btn-ghost btn-sm">Sign in</Link>
                 <Link to="/register" className="btn btn-primary btn-sm">Create account</Link>
               </>
             )}
@@ -270,7 +270,7 @@ export default function LandingPage() {
                 </Link>
               ) : (
                 <>
-                  <Link to="/login" className="px-3 py-2.5 rounded-md text-cv-text-secondary hover:bg-cv-surface-2 hover:text-cv-text">Log in</Link>
+                  <Link to="/login" className="px-3 py-2.5 rounded-md text-cv-text-secondary hover:bg-cv-surface-2 hover:text-cv-text">Sign in</Link>
                   <Link to="/register" className="btn btn-primary justify-center">Create account</Link>
                 </>
               )}
@@ -313,7 +313,7 @@ export default function LandingPage() {
                   Start free with 500 MB <ChevronRight size={15} />
                 </Link>
                 <Link to="/login" className="btn btn-secondary w-full sm:w-auto justify-center px-6 py-3">
-                  Log in
+                  Sign in
                 </Link>
               </div>
               <p className="mt-4 text-xs text-cv-text-muted">
@@ -606,7 +606,7 @@ export default function LandingPage() {
                       Create free account
                     </Link>
                     <Link to="/login" className="btn btn-secondary w-full sm:w-auto justify-center px-6 py-3">
-                      Log in
+                      Sign in
                     </Link>
                   </div>
                 </div>
@@ -645,7 +645,7 @@ export default function LandingPage() {
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-cv-text-muted mb-4">Account</p>
               <ul className="space-y-2.5 text-sm text-cv-text-secondary">
-                <li><Link to="/login" className="hover:text-cv-text transition-colors">Log in</Link></li>
+                <li><Link to="/login" className="hover:text-cv-text transition-colors">Sign in</Link></li>
                 <li><Link to="/register" className="hover:text-cv-text transition-colors">Create account</Link></li>
                 <li><Link to="/forgot-password" className="hover:text-cv-text transition-colors">Reset password</Link></li>
               </ul>

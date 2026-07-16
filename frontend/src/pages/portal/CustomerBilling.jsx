@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CreditCard, FileText, ChevronRight, HardDrive, Zap, Download as DownloadIcon, Package, ArrowUpRight, Check, X, Star, Plus, Trash2, AlertTriangle, Receipt, RefreshCw } from 'lucide-react';
+import { CreditCard, FileText, ChevronRight, HardDrive, Zap, Download as DownloadIcon, Package, Check, Star, Plus, Trash2, AlertTriangle, Receipt, RefreshCw } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
-import { formatCurrency } from '../../lib/currency';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import EmptyState from '../../components/ui/EmptyState';
+import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import TabPills from '../../components/ui/TabPills';
+import { formatCurrency, formatRupees } from '../../lib/currency';
+import { formatDate } from '../../lib/format';
+import { PAYMENT_BADGES } from '../../lib/uiMaps';
 import { loadRazorpayScript } from '../../lib/razorpay';
 import { toast } from 'sonner';
-
-// Payment status → badge class + display label
-const PAYMENT_BADGES = {
-  CREATED: { class: 'badge-pending', label: 'Pending' },
-  CAPTURED: { class: 'badge-captured', label: 'Successful' },
-  FAILED: { class: 'badge-failed', label: 'Failed' },
-  CANCELLED: { class: 'badge-cancelled', label: 'Cancelled' },
-  REFUNDED: { class: 'badge-refunded', label: 'Refunded' },
-};
 
 export default function CustomerBilling() {
   const [tab, setTab] = useState('overview');
@@ -43,6 +41,7 @@ export default function CustomerBilling() {
   const [showAddPM, setShowAddPM] = useState(false);
   const [pmForm, setPmForm] = useState({ brand: 'visa', last4: '', expMonth: '', expYear: '' });
   const [addingPM, setAddingPM] = useState(false);
+  const [removePMTarget, setRemovePMTarget] = useState(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -77,7 +76,7 @@ export default function CustomerBilling() {
 
   // Parse plan details from subscription
   let planName = 'No active plan';
-  let planPrice = '₹0.00';
+  let planPrice = formatRupees(0);
   let billingPeriod = '';
   let quotaGB = 0;
   let includedOps = 0;
@@ -88,7 +87,7 @@ export default function CustomerBilling() {
     billingPeriod = subscription.planVersion?.billingPeriod || '';
     for (const comp of (subscription.planVersion?.priceComponents || [])) {
       const pricing = JSON.parse(comp.pricingModel || '{}');
-      if (pricing.model === 'flat') { planPrice = `₹${pricing.price || 0}`; planPriceValue = pricing.price || 0; }
+      if (pricing.model === 'flat') { planPrice = formatRupees(pricing.price || 0); planPriceValue = pricing.price || 0; }
       // Storage quota = the storage the plan grants (includedGB), falling back to hardCapGB.
       if (pricing.includedGB) quotaGB = pricing.includedGB;
       else if (pricing.hardCapGB && !quotaGB) quotaGB = pricing.hardCapGB;
@@ -137,7 +136,7 @@ export default function CustomerBilling() {
           : `${order.planName} plan — monthly subscription`,
         order_id: order.orderId,
         prefill: order.prefill,
-        theme: { color: '#3b82f6' },
+        theme: { color: '#3b82f6' }, // Razorpay checkout needs a literal hex (cv-primary)
         modal: {
           ondismiss: () => {
             api.reportPaymentFailure({ razorpay_order_id: order.orderId, cancelled: true }).catch(() => {});
@@ -212,7 +211,6 @@ export default function CustomerBilling() {
   };
 
   const handleRemovePM = async (id) => {
-    if (!confirm('Remove this payment method?')) return;
     try {
       await api.removePaymentMethod(id);
       toast.success('Payment method removed');
@@ -240,7 +238,7 @@ export default function CustomerBilling() {
         <body><h1>Invoice ${data.invoice.invoiceNumber}</h1>
         <p class="meta">From: ${data.company?.legalName || 'CloudVitta Inc.'}</p>
         <p class="meta">To: ${data.invoice.customer?.name || 'Customer'}</p>
-        <p class="meta">Date: ${new Date(data.invoice.issueDate).toLocaleDateString()}</p>
+        <p class="meta">Date: ${formatDate(data.invoice.issueDate)}</p>
         <p class="meta">Status: ${data.invoice.status}</p>
         <table><thead><tr><th>Item</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead><tbody>`);
       for (const line of (data.invoice.lines || [])) {
@@ -265,7 +263,7 @@ export default function CustomerBilling() {
     { key: 'payment', label: 'Payment Methods', icon: CreditCard },
   ];
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchData} />;
 
   return (
@@ -275,14 +273,7 @@ export default function CustomerBilling() {
         <p className="text-cv-text-secondary text-sm mt-1">Manage your subscription, plans, and payment methods</p>
       </div>
 
-      <div className="flex gap-1 mb-6 p-1 rounded-lg bg-cv-surface-2 inline-flex flex-wrap">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${tab === t.key ? 'bg-cv-primary text-white' : 'text-cv-text-secondary hover:text-cv-text'}`}>
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={tabs} active={tab} onChange={setTab} />
 
       {/* ─── Overview Tab ─── */}
       {tab === 'overview' && (
@@ -306,7 +297,7 @@ export default function CustomerBilling() {
 
               {subscription?.trialEndDate && subscription.status === 'TRIAL' && (
                 <div className="p-3 rounded-lg bg-cv-info/10 border border-cv-info/20 mb-4">
-                  <p className="text-xs text-cv-info">Trial ends {new Date(subscription.trialEndDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  <p className="text-xs text-cv-info">Trial ends {formatDate(subscription.trialEndDate, 'long')}</p>
                 </div>
               )}
 
@@ -318,7 +309,7 @@ export default function CustomerBilling() {
                 return (
                   <div className={`p-3 rounded-lg mb-4 flex items-center justify-between gap-3 ${expiringSoon ? 'bg-cv-warning/10 border border-cv-warning/20' : 'bg-cv-info/10 border border-cv-info/20'}`}>
                     <p className={`text-xs ${expiringSoon ? 'text-cv-warning' : 'text-cv-info'}`}>
-                      Paid through {periodEnd.toLocaleDateString('en-IN', { month: 'long', day: 'numeric', year: 'numeric' })}
+                      Paid through {formatDate(periodEnd, 'long')}
                       {expiringSoon && (daysLeft > 0 ? ` — ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ' — expired, renew to keep your plan')}
                     </p>
                     {expiringSoon && currentPlan && (
@@ -339,7 +330,7 @@ export default function CustomerBilling() {
                     <span className="font-mono text-cv-text">{currentStorageGB.toFixed(2)} / {quotaGB} GB</span>
                   </div>
                   <div className="progress-bar">
-                    <div className="progress-bar-fill" style={{ width: `${Math.min(100, quotaGB > 0 ? (currentStorageGB / quotaGB) * 100 : 0)}%`, background: currentStorageGB > quotaGB && quotaGB > 0 ? '#ef4444' : undefined }} />
+                    <div className="progress-bar-fill" style={{ width: `${Math.min(100, quotaGB > 0 ? (currentStorageGB / quotaGB) * 100 : 0)}%`, background: currentStorageGB > quotaGB && quotaGB > 0 ? 'var(--color-cv-danger)' : undefined }} />
                   </div>
                 </div>
                 <div>
@@ -355,7 +346,7 @@ export default function CustomerBilling() {
 
               {subscription && (
                 <div className="mt-4 pt-4 border-t border-cv-border">
-                  <button onClick={() => setShowCancel(true)} className="text-xs text-cv-danger hover:text-red-400 font-medium">Cancel Subscription</button>
+                  <button onClick={() => setShowCancel(true)} className="text-xs text-cv-danger hover:text-cv-danger/80 font-medium">Cancel Subscription</button>
                 </div>
               )}
             </div>
@@ -368,12 +359,12 @@ export default function CustomerBilling() {
                   {charges.charges.map((c, i) => (
                     <div key={i} className="flex items-center justify-between text-sm">
                       <span className="text-cv-text-secondary">{c.component}</span>
-                      <span className="font-mono text-cv-text">₹{c.amount.toFixed(2)}</span>
+                      <span className="font-mono text-cv-text">{formatRupees(c.amount)}</span>
                     </div>
                   ))}
                   <div className="border-t border-cv-border pt-3 flex items-center justify-between">
                     <span className="text-sm font-semibold text-cv-text">Total</span>
-                    <span className="text-lg font-bold text-cv-accent">₹{charges.total?.toFixed(2)}</span>
+                    <span className="text-lg font-bold text-cv-accent">{formatRupees(charges.total)}</span>
                   </div>
                 </div>
               ) : (
@@ -400,7 +391,7 @@ export default function CustomerBilling() {
                   <p className="text-xs text-cv-text-muted mt-1">{plan.description || plan.planType}</p>
                 </div>
                 <div className="mb-4">
-                  <span className="text-3xl font-bold text-cv-text">₹{plan.monthlyPrice}</span>
+                  <span className="text-3xl font-bold text-cv-text">{formatRupees(plan.monthlyPrice)}</span>
                   <span className="text-sm text-cv-text-muted">/{plan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</span>
                 </div>
                 <div className="space-y-2 mb-6 text-sm">
@@ -427,7 +418,7 @@ export default function CustomerBilling() {
             ))}
           </div>
           {plans.length === 0 && (
-            <div className="glass-card p-12 text-center text-cv-text-muted">No plans available</div>
+            <EmptyState icon={Package} message="No plans available" compact />
           )}
         </div>
       )}
@@ -449,10 +440,10 @@ export default function CustomerBilling() {
                 {invoices.map((inv) => (
                   <tr key={inv.id}>
                     <td className="font-mono font-medium">{inv.invoiceNumber}</td>
-                    <td className="text-cv-text-muted">{new Date(inv.periodStart).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</td>
+                    <td className="text-cv-text-muted">{formatDate(inv.periodStart)}</td>
                     <td className="font-mono">{formatCurrency(inv.totalCents)}</td>
                     <td><span className={`badge badge-${inv.status.toLowerCase()}`}>{inv.status}</span></td>
-                    <td className="text-cv-text-muted">{new Date(inv.dueDate).toLocaleDateString()}</td>
+                    <td className="text-cv-text-muted">{formatDate(inv.dueDate)}</td>
                     <td>
                       <div className="flex items-center gap-2">
                         <Link to={`/portal/billing/${inv.id}`} className="text-cv-primary hover:text-cv-primary-hover text-xs font-medium flex items-center gap-1">
@@ -468,7 +459,7 @@ export default function CustomerBilling() {
               </tbody>
             </table>
           ) : (
-            <div className="p-8 text-center text-cv-text-muted text-sm">No invoices yet</div>
+            <EmptyState icon={FileText} message="No invoices yet" compact />
           )}
         </div>
       )}
@@ -492,7 +483,7 @@ export default function CustomerBilling() {
                     const badge = PAYMENT_BADGES[p.status] || { class: 'badge-pending', label: p.status };
                     return (
                       <tr key={p.id}>
-                        <td className="text-cv-text-muted">{new Date(p.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                        <td className="text-cv-text-muted">{formatDate(p.createdAt)}</td>
                         <td>{p.planName ? `${p.planName} plan` : 'Plan payment'}{p.purpose === 'renewal' ? ' (renewal)' : ''}</td>
                         <td className="text-cv-text-muted capitalize">{p.method || '—'}</td>
                         <td className="font-mono">{formatCurrency(p.amountCents)}</td>
@@ -513,7 +504,7 @@ export default function CustomerBilling() {
                 </tbody>
               </table>
             ) : (
-              <div className="p-8 text-center text-cv-text-muted text-sm">No payments yet</div>
+              <EmptyState icon={Receipt} message="No payments yet" compact />
             )}
           </div>
 
@@ -532,7 +523,7 @@ export default function CustomerBilling() {
                 <tbody>
                   {transactions.map((t) => (
                     <tr key={t.id}>
-                      <td className="text-cv-text-muted whitespace-nowrap">{new Date(t.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                      <td className="text-cv-text-muted whitespace-nowrap">{formatDate(t.createdAt)}</td>
                       <td className="font-mono text-xs">{t.type.replaceAll('_', ' ')}</td>
                       <td className="text-cv-text-secondary">{t.description}</td>
                       <td className={`font-mono ${t.direction === 'CREDIT' ? 'text-cv-success' : t.direction === 'DEBIT' ? 'text-cv-danger' : 'text-cv-text-muted'}`}>
@@ -543,7 +534,7 @@ export default function CustomerBilling() {
                 </tbody>
               </table>
             ) : (
-              <div className="p-8 text-center text-cv-text-muted text-sm">No transactions yet</div>
+              <EmptyState icon={FileText} message="No transactions yet" compact />
             )}
           </div>
         </div>
@@ -579,17 +570,20 @@ export default function CustomerBilling() {
                     {!pm.isDefault && (
                       <button onClick={() => handleSetDefault(pm.id)} className="text-xs text-cv-primary hover:text-cv-primary-hover font-medium">Set Default</button>
                     )}
-                    <button onClick={() => handleRemovePM(pm.id)} className="p-1.5 text-cv-text-muted hover:text-cv-danger"><Trash2 size={14} /></button>
+                    <button onClick={() => setRemovePMTarget(pm)} className="icon-btn icon-btn-danger" aria-label={`Remove ${pm.brand} card ending ${pm.last4}`}><Trash2 size={14} /></button>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="glass-card p-8 text-center">
-              <CreditCard size={32} className="mx-auto mb-3 text-cv-text-muted opacity-30" />
-              <p className="text-sm text-cv-text-muted">No payment methods</p>
-              <button onClick={() => setShowAddPM(true)} className="btn btn-primary mt-3"><Plus size={14} /> Add Payment Method</button>
-            </div>
+            <EmptyState
+              icon={CreditCard}
+              message="No payment methods"
+              compact
+              action={
+                <button onClick={() => setShowAddPM(true)} className="btn btn-primary"><Plus size={14} /> Add Payment Method</button>
+              }
+            />
           )}
 
           <div className="p-4 rounded-lg bg-cv-info/5 border border-cv-info/10">
@@ -599,97 +593,102 @@ export default function CustomerBilling() {
       )}
 
       {/* ─── Plan Change Modal ─── */}
-      {changingPlan && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setChangingPlan(null)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-cv-text mb-2">Change to {changingPlan.name}?</h3>
+      <Modal open={!!changingPlan} onClose={() => setChangingPlan(null)} title={changingPlan ? `Change to ${changingPlan.name}?` : ''}>
+        {changingPlan && (
+          <>
             <p className="text-sm text-cv-text-muted mb-4">
               {(changingPlan.monthlyPrice || 0) > 0 ? (
-                <>You'll be charged <strong>₹{changingPlan.monthlyPrice}</strong> now via Razorpay secure checkout. Your <strong>{changingPlan.name}</strong> plan activates immediately after payment.</>
+                <>You'll be charged <strong>{formatRupees(changingPlan.monthlyPrice)}</strong> now via Razorpay secure checkout. Your <strong>{changingPlan.name}</strong> plan activates immediately after payment.</>
               ) : (
-                <>You'll be switched to the <strong>{changingPlan.name}</strong> plan at <strong>₹{changingPlan.monthlyPrice}/{changingPlan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</strong>.</>
+                <>You'll be switched to the <strong>{changingPlan.name}</strong> plan at <strong>{formatRupees(changingPlan.monthlyPrice)}/{changingPlan.billingPeriod?.toLowerCase() === 'annual' ? 'year' : 'mo'}</strong>.</>
               )}
               {subscription && ' Your current subscription will be ended.'}
             </p>
             <div className="flex gap-3 justify-end">
               <button onClick={() => setChangingPlan(null)} className="btn btn-secondary">Cancel</button>
               <button onClick={() => handleSubscribe(changingPlan)} className="btn btn-primary" disabled={subscribing}>
-                {subscribing ? 'Processing...' : (changingPlan.monthlyPrice || 0) > 0 ? `Pay ₹${changingPlan.monthlyPrice} & Upgrade` : 'Confirm Change'}
+                {subscribing && <span className="btn-spinner" />}
+                {subscribing ? 'Processing...' : (changingPlan.monthlyPrice || 0) > 0 ? `Pay ${formatRupees(changingPlan.monthlyPrice)} & Upgrade` : 'Confirm Change'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* ─── Cancel Modal ─── */}
-      {showCancel && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowCancel(false)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-4">
-              <AlertTriangle size={20} className="text-cv-warning" />
-              <h3 className="text-lg font-bold text-cv-text">Cancel Subscription</h3>
-            </div>
-            <p className="text-sm text-cv-text-muted mb-4">Are you sure you want to cancel your subscription? Your storage will continue to be available until the end of the billing period.</p>
-            <div className="mb-4">
-              <label className="form-label">Reason (optional)</label>
-              <textarea className="form-input" rows={3} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Tell us why you're leaving..." />
-            </div>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setShowCancel(false)} className="btn btn-secondary">Keep Plan</button>
-              <button onClick={handleCancel} className="btn btn-danger" disabled={cancelling}>
-                {cancelling ? 'Cancelling...' : 'Cancel Subscription'}
-              </button>
-            </div>
+      <Modal open={showCancel} onClose={() => setShowCancel(false)} title="Cancel Subscription">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-9 h-9 rounded-lg bg-cv-warning/10 border border-cv-warning/30 flex items-center justify-center shrink-0">
+            <AlertTriangle size={16} className="text-cv-warning" />
           </div>
+          <p className="text-sm text-cv-text-muted">Are you sure you want to cancel your subscription? Your storage will continue to be available until the end of the billing period.</p>
         </div>
-      )}
+        <div className="mb-4">
+          <label className="form-label" htmlFor="cancel-reason">Reason (optional)</label>
+          <textarea id="cancel-reason" className="form-input" rows={3} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Tell us why you're leaving..." />
+        </div>
+        <div className="flex gap-3 justify-end">
+          <button onClick={() => setShowCancel(false)} className="btn btn-secondary">Keep Plan</button>
+          <button onClick={handleCancel} className="btn btn-danger" disabled={cancelling}>
+            {cancelling && <span className="btn-spinner" />}
+            {cancelling ? 'Cancelling...' : 'Cancel Subscription'}
+          </button>
+        </div>
+      </Modal>
 
       {/* ─── Add Payment Method Modal ─── */}
-      {showAddPM && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowAddPM(false)}>
-          <div className="glass-card p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-cv-text">Add Payment Method</h3>
-              <button onClick={() => setShowAddPM(false)} className="text-cv-text-muted hover:text-cv-text"><X size={18} /></button>
-            </div>
-            <form onSubmit={handleAddPM} className="space-y-4">
-              <div>
-                <label className="form-label">Card Brand</label>
-                <select className="form-input" value={pmForm.brand} onChange={(e) => setPmForm({ ...pmForm, brand: e.target.value })}>
-                  <option value="visa">Visa</option>
-                  <option value="mastercard">Mastercard</option>
-                  <option value="amex">Amex</option>
-                  <option value="discover">Discover</option>
-                </select>
-              </div>
-              <div>
-                <label className="form-label">Last 4 Digits</label>
-                <input className="form-input" maxLength={4} pattern="\d{4}" placeholder="4242" value={pmForm.last4}
-                  onChange={(e) => setPmForm({ ...pmForm, last4: e.target.value.replace(/\D/g, '').substring(0, 4) })} required />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="form-label">Exp. Month</label>
-                  <input className="form-input" type="number" min={1} max={12} placeholder="12" value={pmForm.expMonth}
-                    onChange={(e) => setPmForm({ ...pmForm, expMonth: e.target.value })} />
-                </div>
-                <div>
-                  <label className="form-label">Exp. Year</label>
-                  <input className="form-input" type="number" min={2024} max={2040} placeholder="2028" value={pmForm.expYear}
-                    onChange={(e) => setPmForm({ ...pmForm, expYear: e.target.value })} />
-                </div>
-              </div>
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowAddPM(false)} className="btn btn-secondary">Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={addingPM}>{addingPM ? 'Adding...' : 'Add Card'}</button>
-              </div>
-            </form>
+      <Modal open={showAddPM} onClose={() => setShowAddPM(false)} title="Add Payment Method">
+        <form onSubmit={handleAddPM} className="space-y-4">
+          <div>
+            <label className="form-label" htmlFor="pm-brand">Card Brand</label>
+            <select id="pm-brand" className="form-input" value={pmForm.brand} onChange={(e) => setPmForm({ ...pmForm, brand: e.target.value })}>
+              <option value="visa">Visa</option>
+              <option value="mastercard">Mastercard</option>
+              <option value="amex">Amex</option>
+              <option value="discover">Discover</option>
+            </select>
           </div>
-        </div>
-      )}
+          <div>
+            <label className="form-label" htmlFor="pm-last4">Last 4 Digits</label>
+            <input id="pm-last4" className="form-input" maxLength={4} pattern="\d{4}" placeholder="4242" value={pmForm.last4}
+              onChange={(e) => setPmForm({ ...pmForm, last4: e.target.value.replace(/\D/g, '').substring(0, 4) })} required />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="form-label" htmlFor="pm-exp-month">Exp. Month</label>
+              <input id="pm-exp-month" className="form-input" type="number" min={1} max={12} placeholder="12" value={pmForm.expMonth}
+                onChange={(e) => setPmForm({ ...pmForm, expMonth: e.target.value })} />
+            </div>
+            <div>
+              <label className="form-label" htmlFor="pm-exp-year">Exp. Year</label>
+              <input id="pm-exp-year" className="form-input" type="number" min={2024} max={2040} placeholder="2028" value={pmForm.expYear}
+                onChange={(e) => setPmForm({ ...pmForm, expYear: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button type="button" onClick={() => setShowAddPM(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={addingPM}>
+              {addingPM && <span className="btn-spinner" />}
+              {addingPM ? 'Adding...' : 'Add Card'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ─── Remove Payment Method Confirmation ─── */}
+      <ConfirmDialog
+        open={!!removePMTarget}
+        onClose={() => setRemovePMTarget(null)}
+        onConfirm={() => handleRemovePM(removePMTarget.id)}
+        title="Remove payment method?"
+        message={removePMTarget ? `Remove the ${removePMTarget.brand} card ending in ${removePMTarget.last4}?` : ''}
+        confirmLabel="Remove"
+        danger
+      />
+
       {/* ─── Payment Verifying Overlay ─── */}
       {verifying && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4" role="dialog" aria-modal="true" aria-label="Verifying payment">
           <div className="glass-card p-8 text-center max-w-sm">
             <div className="w-10 h-10 border-2 border-cv-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
             <h3 className="text-lg font-bold text-cv-text mb-1">Verifying payment…</h3>

@@ -1,34 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { FolderOpen, Upload, Download, Trash2, File, FileText, FileImage, FileVideo, FileArchive, ChevronRight, ArrowLeft, Search, RefreshCw } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { FolderOpen, Upload, Download, Trash2, ChevronRight, Search, RefreshCw } from 'lucide-react';
 import api from '../../api/client';
 import { toast } from 'sonner';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
-}
-
-function getFileIcon(contentType) {
-  if (!contentType) return File;
-  if (contentType.startsWith('image/')) return FileImage;
-  if (contentType.startsWith('video/')) return FileVideo;
-  if (contentType.startsWith('text/')) return FileText;
-  if (contentType.includes('zip') || contentType.includes('tar') || contentType.includes('gzip') || contentType.includes('compressed')) return FileArchive;
-  return File;
-}
-
-function getFileColor(contentType) {
-  if (!contentType) return '#6b7490';
-  if (contentType.startsWith('image/')) return '#34d399';
-  if (contentType.startsWith('video/')) return '#f87171';
-  if (contentType.startsWith('text/')) return '#60a5fa';
-  if (contentType.includes('zip') || contentType.includes('compressed')) return '#fbbf24';
-  return '#6b7490';
-}
+import { formatBytes, formatDate } from '../../lib/format';
+import { getFileIcon } from '../../lib/uiMaps';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PageHeader from '../../components/ui/PageHeader';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 export default function BucketDetail() {
   const { id: bucketId } = useParams();
@@ -41,6 +20,7 @@ export default function BucketDetail() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   useEffect(() => {
     loadBucket();
@@ -115,10 +95,9 @@ export default function BucketDetail() {
     }
   }
 
-  async function handleDelete(objectId, key) {
-    if (!confirm(`Delete "${key}"?`)) return;
+  async function handleDelete(obj) {
     try {
-      await api.deleteObject(bucketId, objectId);
+      await api.deleteObject(bucketId, obj.id);
       toast.success('Object deleted');
       loadObjects();
       loadBucket();
@@ -147,36 +126,28 @@ export default function BucketDetail() {
   // Build breadcrumb from prefix
   const breadcrumbs = prefix ? prefix.split('/').filter(Boolean) : [];
 
-  if (!bucket && loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (!bucket && loading) return <LoadingSpinner />;
 
   return (
     <div className="animate-fade-in" onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Link to="/storage/buckets" className="p-2 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted hover:text-cv-text transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          <div>
-            <div className="flex items-center gap-2">
-              <FolderOpen size={20} className="text-cv-accent" />
-              <h1 className="text-2xl font-bold text-cv-text">{bucket?.name}</h1>
-            </div>
-            <p className="text-cv-text-secondary text-sm mt-0.5">
-              {bucket?.customer?.name} • {formatBytes(bucket?.usedBytes || 0)} • {bucket?.objectCount?.toLocaleString()} objects
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={loadObjects} className="btn btn-secondary btn-sm" title="Refresh">
-            <RefreshCw size={14} />
-          </button>
-          <label className="btn btn-primary cursor-pointer">
-            <Upload size={16} /> Upload Files
-            <input type="file" multiple className="hidden" onChange={(e) => handleUpload(Array.from(e.target.files))} />
-          </label>
-        </div>
-      </div>
+      <PageHeader
+        title={bucket?.name}
+        titleIcon={FolderOpen}
+        subtitle={`${bucket?.customer?.name} • ${formatBytes(bucket?.usedBytes || 0)} • ${bucket?.objectCount?.toLocaleString()} objects`}
+        backTo="/storage/buckets"
+        actions={
+          <>
+            <button onClick={loadObjects} className="btn btn-secondary btn-sm" aria-label="Refresh objects">
+              <RefreshCw size={14} />
+            </button>
+            <label className="btn btn-primary cursor-pointer">
+              <Upload size={16} /> Upload Files
+              <input type="file" multiple className="hidden" onChange={(e) => handleUpload(Array.from(e.target.files))} />
+            </label>
+          </>
+        }
+      />
 
       {/* Breadcrumbs */}
       <div className="flex items-center gap-1 mb-4 text-sm">
@@ -207,6 +178,7 @@ export default function BucketDetail() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && setPrefix(searchInput)}
+            aria-label="Filter objects by key prefix"
           />
         </div>
         <span className="text-xs text-cv-text-muted">{totalCount} objects</span>
@@ -225,8 +197,8 @@ export default function BucketDetail() {
 
       {/* Upload progress */}
       {uploadProgress && (
-        <div className="glass-card p-4 mb-4 flex items-center gap-3">
-          <div className="w-6 h-6 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" />
+        <div className="glass-card p-4 mb-4 flex items-center gap-3" role="status">
+          <div className="w-6 h-6 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" aria-hidden="true" />
           <div className="flex-1">
             <p className="text-sm text-cv-text">Uploading {uploadProgress.name}...</p>
             <p className="text-xs text-cv-text-muted">{uploadProgress.current} of {uploadProgress.total}</p>
@@ -249,15 +221,14 @@ export default function BucketDetail() {
             </thead>
             <tbody>
               {objects.map((obj) => {
-                const Icon = getFileIcon(obj.contentType);
-                const color = getFileColor(obj.contentType);
+                const { Icon, colorClass } = getFileIcon(obj.contentType);
                 const filename = obj.key.split('/').pop();
                 return (
                   <tr key={obj.id}>
                     <td>
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${color}15`, border: `1px solid ${color}30` }}>
-                          <Icon size={16} style={{ color }} />
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-cv-surface-3 border border-cv-border">
+                          <Icon size={16} className={colorClass} />
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-cv-text truncate">{filename}</p>
@@ -267,13 +238,13 @@ export default function BucketDetail() {
                     </td>
                     <td className="font-mono text-xs">{formatBytes(obj.sizeBytes)}</td>
                     <td className="text-xs text-cv-text-secondary">{obj.contentType}</td>
-                    <td className="text-xs text-cv-text-muted">{new Date(obj.updatedAt).toLocaleString()}</td>
+                    <td className="text-xs text-cv-text-muted">{formatDate(obj.updatedAt, 'datetime')}</td>
                     <td>
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => handleDownload(obj.id, obj.key)} className="p-1.5 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted hover:text-cv-accent transition-colors" title="Download">
+                        <button onClick={() => handleDownload(obj.id, obj.key)} className="icon-btn" aria-label={`Download ${filename}`}>
                           <Download size={14} />
                         </button>
-                        <button onClick={() => handleDelete(obj.id, obj.key)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-cv-text-muted hover:text-cv-danger transition-colors" title="Delete">
+                        <button onClick={() => setDeleteTarget(obj)} className="icon-btn icon-btn-danger" aria-label={`Delete ${filename}`}>
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -297,6 +268,17 @@ export default function BucketDetail() {
           </div>
         )}
       </div>
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => handleDelete(deleteTarget)}
+        title="Delete object?"
+        message={`Delete "${deleteTarget?.key}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }

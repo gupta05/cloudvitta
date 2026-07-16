@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Play, XCircle, FileText, Puzzle } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Play, XCircle, FileText, Puzzle } from 'lucide-react';
 import api from '../../api/client';
-import { formatCurrency } from '../../lib/currency';
+import { formatCurrency, formatRupees } from '../../lib/currency';
+import { formatDate } from '../../lib/format';
 import { toast } from 'sonner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PageHeader from '../../components/ui/PageHeader';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import EmptyState from '../../components/ui/EmptyState';
 
 export default function SubscriptionDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [sub, setSub] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showCancel, setShowCancel] = useState(false);
 
   const fetchSub = () => api.getSubscription(id).then(setSub).finally(() => setLoading(false));
   useEffect(() => { fetchSub(); }, [id]);
@@ -17,34 +24,34 @@ export default function SubscriptionDetail() {
   const handleCancel = async () => { try { await api.cancelAdminSubscription(id, 'User requested'); toast.success('Cancelled'); fetchSub(); } catch (e) { toast.error(e.message); } };
   const handleGenerateInvoice = async () => { try { await api.generateInvoice(id); toast.success('Invoice generated!'); fetchSub(); } catch (e) { toast.error(e.message); } };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (!sub) return <div className="text-center py-20 text-cv-text-muted">Subscription not found</div>;
 
-  const renderPricing = (str) => { try { const p = JSON.parse(str || '{}'); return p.model === 'flat' ? `₹${p.price}` : p.model === 'per_unit' ? `₹${p.unitPrice}/unit` : p.model || '—'; } catch { return '—'; } };
+  const renderPricing = (str) => { try { const p = JSON.parse(str || '{}'); return p.model === 'flat' ? formatRupees(p.price || 0) : p.model === 'per_unit' ? `${formatRupees(p.unitPrice || 0)}/unit` : p.model || '—'; } catch { return '—'; } };
 
   return (
     <div>
-      <Link to="/subscriptions" className="inline-flex items-center gap-1.5 text-sm text-cv-text-secondary hover:text-cv-text mb-4"><ArrowLeft size={16} /> Back</Link>
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-cv-text">{sub.customer?.name}</h1>
-          <p className="text-cv-text-secondary text-sm mt-1">{sub.planVersion?.plan?.name} • {sub.planVersion?.billingPeriod} • {sub.planVersion?.currency}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`badge badge-${sub.status.toLowerCase()}`}>{sub.status}</span>
-          {sub.status === 'PENDING' && <button className="btn btn-primary btn-sm" onClick={handleActivate}><Play size={14} /> Activate</button>}
-          {['ACTIVE', 'TRIAL'].includes(sub.status) && (
-            <>
-              <button className="btn btn-secondary btn-sm" onClick={handleGenerateInvoice}><FileText size={14} /> Generate Invoice</button>
-              <button className="btn btn-danger btn-sm" onClick={handleCancel}><XCircle size={14} /> Cancel</button>
-            </>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title={sub.customer?.name}
+        subtitle={`${sub.planVersion?.plan?.name} • ${sub.planVersion?.billingPeriod} • ${sub.planVersion?.currency}`}
+        backTo="/subscriptions"
+        actions={
+          <>
+            <span className={`badge badge-${sub.status.toLowerCase()}`}>{sub.status}</span>
+            {sub.status === 'PENDING' && <button className="btn btn-primary btn-sm" onClick={handleActivate}><Play size={14} /> Activate</button>}
+            {['ACTIVE', 'TRIAL'].includes(sub.status) && (
+              <>
+                <button className="btn btn-secondary btn-sm" onClick={handleGenerateInvoice}><FileText size={14} /> Generate Invoice</button>
+                <button className="btn btn-danger btn-sm" onClick={() => setShowCancel(true)}><XCircle size={14} /> Cancel</button>
+              </>
+            )}
+          </>
+        }
+      />
 
       {/* Info */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Start Date</p><p className="font-medium mt-1">{new Date(sub.billingStartDate).toLocaleDateString()}</p></div>
+        <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Start Date</p><p className="font-medium mt-1">{formatDate(sub.billingStartDate)}</p></div>
         <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Billing Day</p><p className="font-medium mt-1">Day {sub.billingDay}</p></div>
         <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Net Terms</p><p className="font-medium mt-1">{sub.netTermsDays} days</p></div>
         <div className="glass-card p-4"><p className="text-xs text-cv-text-muted">Coupon</p><p className="font-medium mt-1">{sub.coupon ? <span className="badge badge-trial">{sub.coupon.code}</span> : '—'}</p></div>
@@ -96,18 +103,29 @@ export default function SubscriptionDetail() {
             <thead><tr><th>Invoice #</th><th>Status</th><th>Amount</th><th>Period</th><th>Due Date</th></tr></thead>
             <tbody>
               {sub.invoices.map((inv) => (
-                <tr key={inv.id} className="cursor-pointer" onClick={() => window.location.href = `/invoices/${inv.id}`}>
+                <tr key={inv.id} className="cursor-pointer" onClick={() => navigate(`/invoices/${inv.id}`)}>
                   <td className="font-mono text-sm">{inv.invoiceNumber}</td>
                   <td><span className={`badge badge-${inv.status.toLowerCase()}`}>{inv.status}</span></td>
                   <td className="font-medium">{formatCurrency(inv.totalCents)}</td>
-                  <td className="text-cv-text-secondary text-xs">{new Date(inv.periodStart).toLocaleDateString()} — {new Date(inv.periodEnd).toLocaleDateString()}</td>
-                  <td className="text-cv-text-secondary">{new Date(inv.dueDate).toLocaleDateString()}</td>
+                  <td className="text-cv-text-secondary text-xs">{formatDate(inv.periodStart)} — {formatDate(inv.periodEnd)}</td>
+                  <td className="text-cv-text-secondary">{formatDate(inv.dueDate)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <p className="text-sm text-cv-text-muted">No invoices yet</p>}
+        ) : <EmptyState icon={FileText} title="No invoices yet" compact />}
       </div>
+
+      <ConfirmDialog
+        open={showCancel}
+        onClose={() => setShowCancel(false)}
+        onConfirm={handleCancel}
+        title="Cancel subscription?"
+        message={`This will cancel the subscription for ${sub.customer?.name}. This action cannot be undone.`}
+        confirmLabel="Cancel Subscription"
+        cancelLabel="Keep Subscription"
+        danger
+      />
     </div>
   );
 }

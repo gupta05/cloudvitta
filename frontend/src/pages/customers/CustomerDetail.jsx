@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, CreditCard, FileText, Activity } from 'lucide-react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { CreditCard, FileText, Activity } from 'lucide-react';
 import api from '../../api/client';
 import { formatCurrency } from '../../lib/currency';
+import { formatDate } from '../../lib/format';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PageHeader from '../../components/ui/PageHeader';
+import EmptyState from '../../components/ui/EmptyState';
 
 export default function CustomerDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -13,32 +18,30 @@ export default function CustomerDetail() {
     api.getCustomer(id).then(setCustomer).finally(() => setLoading(false));
   }, [id]);
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (!customer) return <div className="text-cv-text-muted text-center py-20">Customer not found</div>;
 
   return (
     <div>
-      <Link to="/customers" className="inline-flex items-center gap-1.5 text-sm text-cv-text-secondary hover:text-cv-text mb-4"><ArrowLeft size={16} /> Back to Customers</Link>
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-cv-text">{customer.name}</h1>
-          <p className="text-cv-text-secondary text-sm mt-1">{customer.email} {customer.alias && <span className="ml-2 font-mono text-xs bg-cv-surface-2 px-2 py-0.5 rounded">@{customer.alias}</span>}</p>
-        </div>
-        <span className="badge badge-active">{customer.currency}</span>
-      </div>
+      <PageHeader
+        title={customer.name}
+        subtitle={<>{customer.email} {customer.alias && <span className="ml-2 font-mono text-xs bg-cv-surface-2 px-2 py-0.5 rounded">@{customer.alias}</span>}</>}
+        backTo="/customers"
+        actions={<span className="badge badge-active">{customer.currency}</span>}
+      />
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="glass-card p-4 flex items-center gap-3">
-          <CreditCard size={20} className="text-cv-primary" />
+          <div className="icon-chip"><CreditCard size={20} className="text-cv-primary" /></div>
           <div><p className="text-xs text-cv-text-muted">Subscriptions</p><p className="text-lg font-bold">{customer._count?.subscriptions || 0}</p></div>
         </div>
         <div className="glass-card p-4 flex items-center gap-3">
-          <FileText size={20} className="text-cv-accent" />
+          <div className="icon-chip"><FileText size={20} className="text-cv-accent" /></div>
           <div><p className="text-xs text-cv-text-muted">Invoices</p><p className="text-lg font-bold">{customer._count?.invoices || 0}</p></div>
         </div>
         <div className="glass-card p-4 flex items-center gap-3">
-          <Activity size={20} className="text-cv-success" />
+          <div className="icon-chip"><Activity size={20} className="text-cv-success" /></div>
           <div><p className="text-xs text-cv-text-muted">Usage Events</p><p className="text-lg font-bold">{customer._count?.usageEvents || 0}</p></div>
         </div>
       </div>
@@ -51,16 +54,16 @@ export default function CustomerDetail() {
             <thead><tr><th>Plan</th><th>Status</th><th>Billing Period</th><th>Start Date</th></tr></thead>
             <tbody>
               {customer.subscriptions.map((s) => (
-                <tr key={s.id} className="cursor-pointer" onClick={() => window.location.href = `/subscriptions/${s.id}`}>
+                <tr key={s.id} className="cursor-pointer" onClick={() => navigate(`/subscriptions/${s.id}`)}>
                   <td className="font-medium">{s.planVersion?.plan?.name || 'Unknown'}</td>
                   <td><span className={`badge badge-${s.status.toLowerCase()}`}>{s.status}</span></td>
                   <td>{s.planVersion?.billingPeriod}</td>
-                  <td>{new Date(s.billingStartDate).toLocaleDateString()}</td>
+                  <td>{formatDate(s.billingStartDate)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <p className="text-sm text-cv-text-muted">No subscriptions</p>}
+        ) : <EmptyState icon={CreditCard} title="No subscriptions" compact />}
       </div>
 
       {/* Recent Invoices */}
@@ -71,16 +74,16 @@ export default function CustomerDetail() {
             <thead><tr><th>Invoice #</th><th>Status</th><th>Amount</th><th>Date</th></tr></thead>
             <tbody>
               {customer.invoices.map((inv) => (
-                <tr key={inv.id} className="cursor-pointer" onClick={() => window.location.href = `/invoices/${inv.id}`}>
+                <tr key={inv.id} className="cursor-pointer" onClick={() => navigate(`/invoices/${inv.id}`)}>
                   <td className="font-mono text-sm">{inv.invoiceNumber}</td>
                   <td><span className={`badge badge-${inv.status.toLowerCase()}`}>{inv.status}</span></td>
                   <td className="font-medium">{formatCurrency(inv.totalCents)}</td>
-                  <td>{new Date(inv.issueDate).toLocaleDateString()}</td>
+                  <td>{formatDate(inv.issueDate)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <p className="text-sm text-cv-text-muted">No invoices</p>}
+        ) : <EmptyState icon={FileText} title="No invoices" compact />}
       </div>
     </div>
   );

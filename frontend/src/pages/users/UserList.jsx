@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Search, ChevronRight, Shield, User, UserX, Filter } from 'lucide-react';
+import { Search, ChevronRight } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import { TableSkeleton } from '../../components/ui/Skeleton';
+import Pagination from '../../components/ui/Pagination';
+import { ROLE_BADGES } from '../../lib/uiMaps';
+import { formatDate } from '../../lib/format';
 
 export default function UserList() {
   const [users, setUsers] = useState([]);
@@ -41,12 +45,6 @@ export default function UserList() {
     fetchUsers(1);
   };
 
-  const roleColors = {
-    admin: 'badge-active',
-    member: 'badge-finalized',
-    user: 'badge-draft',
-  };
-
   return (
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
@@ -60,24 +58,22 @@ export default function UserList() {
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <form onSubmit={handleSearch} className="flex-1 min-w-[240px] max-w-md relative">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-cv-text-muted" />
-          <input className="form-input pl-9" placeholder="Search by name or email..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="form-input pl-9" placeholder="Search by name or email..." value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search users" />
         </form>
-        <select className="form-input w-auto" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+        <select className="form-input w-auto" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} aria-label="Filter by role">
           <option value="">All Roles</option>
           <option value="admin">Admin</option>
           <option value="member">Member</option>
           <option value="user">User</option>
         </select>
-        <select className="form-input w-auto" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <select className="form-input w-auto" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
           <option value="">All Status</option>
           <option value="active">Active</option>
           <option value="deactivated">Deactivated</option>
         </select>
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>
-      ) : error ? (
+      {error ? (
         <ErrorBanner message={error} onRetry={() => fetchUsers()} />
       ) : (
         <>
@@ -94,72 +90,57 @@ export default function UserList() {
                   <th></th>
                 </tr>
               </thead>
-              <tbody>
-                {users.length === 0 ? (
-                  <tr><td colSpan="7" className="text-center py-10 text-cv-text-muted">No users found</td></tr>
-                ) : users.map((user) => (
-                  <tr key={user.id}>
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white bg-cv-primary flex-shrink-0">
-                          {user.displayName?.charAt(0)?.toUpperCase() || '?'}
+              {loading ? (
+                <TableSkeleton rows={5} cols={7} />
+              ) : (
+                <tbody>
+                  {users.length === 0 ? (
+                    <tr><td colSpan="7" className="text-center py-10 text-cv-text-muted">No users found</td></tr>
+                  ) : users.map((user) => (
+                    <tr key={user.id}>
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white bg-cv-primary flex-shrink-0">
+                            {user.displayName?.charAt(0)?.toUpperCase() || '?'}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-cv-text truncate">{user.displayName}</p>
+                            <p className="text-xs text-cv-text-muted truncate">{user.email}</p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-cv-text truncate">{user.displayName}</p>
-                          <p className="text-xs text-cv-text-muted truncate">{user.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`badge ${roleColors[user.role] || 'badge-draft'}`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="text-cv-text-secondary text-sm">{user.tenant?.name || '—'}</td>
-                    <td>
-                      {user.deactivatedAt ? (
-                        <span className="badge badge-cancelled">Deactivated</span>
-                      ) : (
-                        <span className="badge badge-active">Active</span>
-                      )}
-                    </td>
-                    <td className="text-cv-text-muted text-sm">
-                      {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : 'Never'}
-                    </td>
-                    <td className="text-cv-text-muted text-sm">
-                      {new Date(user.createdAt).toLocaleDateString()}
-                    </td>
-                    <td>
-                      <Link to={`/users/${user.id}`} className="text-cv-primary hover:text-cv-primary-hover text-xs font-medium flex items-center gap-1">
-                        View <ChevronRight size={12} />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+                      </td>
+                      <td>
+                        <span className={`badge ${ROLE_BADGES[user.role] || 'badge-draft'}`}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td className="text-cv-text-secondary text-sm">{user.tenant?.name || '—'}</td>
+                      <td>
+                        {user.deactivatedAt ? (
+                          <span className="badge badge-cancelled">Deactivated</span>
+                        ) : (
+                          <span className="badge badge-active">Active</span>
+                        )}
+                      </td>
+                      <td className="text-cv-text-muted text-sm">
+                        {user.lastLoginAt ? formatDate(user.lastLoginAt) : 'Never'}
+                      </td>
+                      <td className="text-cv-text-muted text-sm">
+                        {formatDate(user.createdAt)}
+                      </td>
+                      <td>
+                        <Link to={`/users/${user.id}`} className="text-cv-primary hover:text-cv-primary-hover text-xs font-medium flex items-center gap-1">
+                          View <ChevronRight size={12} />
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              )}
             </table>
           </div>
 
-          {/* Pagination */}
-          {pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-cv-text-muted">
-                Page {pagination.page} of {pagination.totalPages}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => fetchUsers(pagination.page - 1)}
-                  disabled={pagination.page <= 1}
-                  className="btn btn-secondary btn-sm disabled:opacity-40"
-                >Previous</button>
-                <button
-                  onClick={() => fetchUsers(pagination.page + 1)}
-                  disabled={pagination.page >= pagination.totalPages}
-                  className="btn btn-secondary btn-sm disabled:opacity-40"
-                >Next</button>
-              </div>
-            </div>
-          )}
+          <Pagination page={pagination.page} totalPages={pagination.totalPages} onChange={fetchUsers} />
         </>
       )}
     </div>

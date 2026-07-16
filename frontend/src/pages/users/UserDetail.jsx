@@ -1,26 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { User, Shield, HardDrive, CreditCard, Monitor, Bell, ArrowLeft, AlertTriangle, Clock, Globe } from 'lucide-react';
+import { User, Shield, HardDrive, CreditCard, Monitor, Bell, ArrowLeft, Check, X } from 'lucide-react';
 import api from '../../api/client';
 import ErrorBanner from '../../components/ui/ErrorBanner';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import TabPills from '../../components/ui/TabPills';
+import { formatBytes, formatDate } from '../../lib/format';
+import { ROLE_BADGES, parseUA } from '../../lib/uiMaps';
 import { toast } from 'sonner';
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(i > 2 ? 2 : 0)} ${sizes[i]}`;
-}
-
-function parseUA(ua) {
-  if (!ua) return 'Unknown';
-  if (ua.includes('Chrome')) return 'Chrome';
-  if (ua.includes('Firefox')) return 'Firefox';
-  if (ua.includes('Safari')) return 'Safari';
-  if (ua.includes('Edge')) return 'Edge';
-  return ua.substring(0, 40);
-}
 
 export default function UserDetail() {
   const { id } = useParams();
@@ -31,6 +19,8 @@ export default function UserDetail() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showDeactivate, setShowDeactivate] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   const fetchUser = async () => {
     setLoading(true);
@@ -76,7 +66,6 @@ export default function UserDetail() {
 
   const handleToggleActive = async () => {
     const deactivate = !user.deactivatedAt;
-    if (deactivate && !confirm('Deactivate this user? They will be unable to log in.')) return;
     try {
       await api.updateUser(id, { deactivate });
       toast.success(deactivate ? 'User deactivated' : 'User reactivated');
@@ -85,8 +74,6 @@ export default function UserDetail() {
   };
 
   const handleDelete = async () => {
-    if (!confirm('Permanently delete this user and all their data? This cannot be undone.')) return;
-    if (!confirm('This will delete ALL storage files, invoices, and subscriptions. Are you absolutely sure?')) return;
     try {
       await api.deleteUser(id);
       toast.success('User deleted');
@@ -100,17 +87,15 @@ export default function UserDetail() {
     { key: 'notifications', label: 'Notifications', icon: Bell },
   ];
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-cv-primary border-t-transparent rounded-full animate-spin" /></div>;
+  if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBanner message={error} onRetry={fetchUser} />;
   if (!user) return null;
-
-  const roleColors = { admin: 'badge-active', member: 'badge-finalized', user: 'badge-draft' };
 
   return (
     <div className="animate-fade-in">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <button onClick={() => navigate('/users')} className="p-2 rounded-lg hover:bg-cv-surface-2 text-cv-text-muted hover:text-cv-text transition-colors">
+      <div className="flex flex-wrap items-center gap-4 mb-6">
+        <button onClick={() => navigate('/users')} className="icon-btn" aria-label="Back to users">
           <ArrowLeft size={20} />
         </button>
         <div className="flex items-center gap-4 flex-1">
@@ -118,30 +103,28 @@ export default function UserDetail() {
             {user.displayName?.charAt(0)?.toUpperCase() || '?'}
           </div>
           <div>
-            <h1 className="text-xl font-bold text-cv-text flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-cv-text flex items-center gap-2">
               {user.displayName}
-              <span className={`badge ${roleColors[user.role] || 'badge-draft'}`}>{user.role}</span>
+              <span className={`badge ${ROLE_BADGES[user.role] || 'badge-draft'}`}>{user.role}</span>
               {user.deactivatedAt && <span className="badge badge-cancelled">Deactivated</span>}
             </h1>
-            <p className="text-sm text-cv-text-muted">{user.email}</p>
+            <p className="text-sm text-cv-text-muted mt-1">{user.email}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleToggleActive} className={`btn btn-sm ${user.deactivatedAt ? 'btn-primary' : 'btn-danger'}`}>
+          <button
+            onClick={() => (user.deactivatedAt ? handleToggleActive() : setShowDeactivate(true))}
+            className={`btn btn-sm ${user.deactivatedAt ? 'btn-primary' : 'btn-danger'}`}
+          >
             {user.deactivatedAt ? 'Reactivate' : 'Deactivate'}
           </button>
-          <button onClick={handleDelete} className="btn btn-danger btn-sm">Delete</button>
+          <button onClick={() => setShowDelete(true)} className="btn btn-danger btn-sm">Delete</button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 rounded-lg bg-cv-surface-2 inline-flex">
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${tab === t.key ? 'bg-cv-primary text-white' : 'text-cv-text-secondary hover:text-cv-text'}`}>
-            <t.icon size={16} /> {t.label}
-          </button>
-        ))}
+      <div className="mb-6">
+        <TabPills tabs={tabs} active={tab} onChange={setTab} />
       </div>
 
       {/* ─── Overview ─── */}
@@ -151,7 +134,7 @@ export default function UserDetail() {
           <div className="lg:col-span-2 space-y-6">
             <div className="glass-card p-6">
               <h3 className="text-sm font-semibold text-cv-text mb-4">Account Details</h3>
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-cv-text-muted">User ID</span>
                   <p className="font-mono text-cv-text text-xs mt-1">{user.id}</p>
@@ -174,15 +157,19 @@ export default function UserDetail() {
                 </div>
                 <div>
                   <span className="text-cv-text-muted">Email Verified</span>
-                  <p className="text-cv-text mt-1">{user.isVerified ? '✅ Yes' : '❌ No'}</p>
+                  <p className="text-cv-text mt-1 flex items-center gap-1.5">
+                    {user.isVerified
+                      ? <><Check size={14} className="text-cv-success" aria-hidden="true" /> Yes</>
+                      : <><X size={14} className="text-cv-danger" aria-hidden="true" /> No</>}
+                  </p>
                 </div>
                 <div>
                   <span className="text-cv-text-muted">Created</span>
-                  <p className="text-cv-text mt-1">{new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                  <p className="text-cv-text mt-1">{formatDate(user.createdAt, 'long')}</p>
                 </div>
                 <div>
                   <span className="text-cv-text-muted">Last Login</span>
-                  <p className="text-cv-text mt-1">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</p>
+                  <p className="text-cv-text mt-1">{user.lastLoginAt ? formatDate(user.lastLoginAt, 'datetime') : 'Never'}</p>
                 </div>
               </div>
             </div>
@@ -195,6 +182,7 @@ export default function UserDetail() {
                   <button
                     key={role}
                     onClick={() => handleRoleChange(role)}
+                    aria-pressed={user.role === role}
                     className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${user.role === role
                       ? 'bg-cv-primary text-white border-cv-primary'
                       : 'bg-cv-bg text-cv-text-secondary border-cv-border hover:border-cv-primary hover:text-cv-text'}`}
@@ -234,7 +222,7 @@ export default function UserDetail() {
       {/* ─── Sessions ─── */}
       {tab === 'sessions' && (
         <div className="glass-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-cv-border">
+          <div className="card-header">
             <h3 className="text-sm font-semibold text-cv-text">Session History ({sessions.length})</h3>
           </div>
           {sessions.length > 0 ? (
@@ -252,8 +240,8 @@ export default function UserDetail() {
                         {s.isActive ? 'Active' : 'Expired'}
                       </span>
                     </td>
-                    <td className="text-cv-text-muted text-sm">{new Date(s.lastActiveAt).toLocaleString()}</td>
-                    <td className="text-cv-text-muted text-sm">{new Date(s.createdAt).toLocaleString()}</td>
+                    <td className="text-cv-text-muted text-sm">{formatDate(s.lastActiveAt, 'datetime')}</td>
+                    <td className="text-cv-text-muted text-sm">{formatDate(s.createdAt, 'datetime')}</td>
                   </tr>
                 ))}
               </tbody>
@@ -267,7 +255,7 @@ export default function UserDetail() {
       {/* ─── Notifications ─── */}
       {tab === 'notifications' && (
         <div className="glass-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-cv-border">
+          <div className="card-header">
             <h3 className="text-sm font-semibold text-cv-text">Notifications ({notifications.length})</h3>
           </div>
           {notifications.length > 0 ? (
@@ -276,11 +264,11 @@ export default function UserDetail() {
                 <div key={n.id} className={`px-5 py-4 ${!n.isRead ? 'bg-cv-surface-2' : ''}`}>
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${!n.isRead ? 'bg-cv-primary' : 'bg-cv-text-muted'}`} />
+                      <span className={`w-2 h-2 rounded-full ${!n.isRead ? 'bg-cv-primary' : 'bg-cv-text-muted'}`} aria-hidden="true" />
                       <span className="text-sm font-medium text-cv-text">{n.title}</span>
                       <span className="badge badge-draft text-xs">{n.type}</span>
                     </div>
-                    <span className="text-xs text-cv-text-muted">{new Date(n.createdAt).toLocaleString()}</span>
+                    <span className="text-xs text-cv-text-muted">{formatDate(n.createdAt, 'datetime')}</span>
                   </div>
                   <p className="text-sm text-cv-text-secondary ml-4">{n.message}</p>
                 </div>
@@ -291,6 +279,28 @@ export default function UserDetail() {
           )}
         </div>
       )}
+
+      {/* Deactivate confirmation */}
+      <ConfirmDialog
+        open={showDeactivate}
+        onClose={() => setShowDeactivate(false)}
+        onConfirm={handleToggleActive}
+        title="Deactivate user?"
+        message={`${user.displayName} will be unable to log in until reactivated.`}
+        confirmLabel="Deactivate"
+        danger
+      />
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={showDelete}
+        onClose={() => setShowDelete(false)}
+        onConfirm={handleDelete}
+        title="Permanently delete user?"
+        message={`This will delete ${user.displayName} and ALL their data — storage files, invoices, and subscriptions. This cannot be undone.`}
+        confirmLabel="Delete User"
+        danger
+      />
     </div>
   );
 }
